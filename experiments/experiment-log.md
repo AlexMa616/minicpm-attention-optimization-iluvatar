@@ -1017,3 +1017,27 @@
 - `FACT`：原型先前按全局 token index 对 `softmax_segm_*` 做 `index_select`；真实 vendor backend 的 scratch 只分配 `seq_threshold_3D` 行（本场景约 64），可能在 2048-token prefill 中越界。现在 prefill 子调用不用 3D scratch，decode 子调用只取前 `num_decode_requests` 行。诊断探针同步改为真实 64 行 scratch，并增加 `--prefill-index` 检查非首行 prefill 和数值失败阈值。
 - `UNKNOWN`：这些新改动仅经本地 `py_compile`/`git diff --check`，由于 SSH 命令连续超时，未完成 GPU 2 复验；之前 `1.010x` 只适用于旧诊断原型，不能移植到当前版本。每层索引构建、scatter 和 CUDA graph 仍须验证，当前不发布插件分流代码、不启用 9032。
 - GitHub `main` 的 `438c0ec` 已同步本轮交叉复测数据和初版诊断探针；后续诊断脚本/记录可同步，但未经设备复验的插件修正不得加入正式集成补丁。已发布的 `integration/vllm-plugin-FL-split-kv.patch` 仍是旧的整批 Split-KV 候选，不包含分流原型。
+
+### 实验 2026-09-28-06：9032 交叉顺序 A/B（8-split candidate vs native baseline）
+
+- 环境：ub39 `mllv`，Iluvatar BI-V150 GPU 1，端口 9032；固定 `16384 input / 256 output / c16 / 16 prompts`。9031 官方服务未停止、未重启、未发送请求，实验结束后 9032 已释放。
+- 目的：用 6 对交叉顺序、每次 benchmark 内置 4 轮且跳过首轮 warmup，判断 8-split candidate 是否有稳定端到端收益。
+- 顺序：`baseline -> candidate -> candidate -> baseline -> baseline -> candidate -> candidate -> baseline -> baseline -> candidate -> candidate -> baseline`，共 12 次服务 benchmark，全部返回 `rc=0`。
+- 原始日志：远端 `/workspace/logs/cross_ab_c16_20260928/`；编排日志 `/workspace/logs/cross_ab_c16_20260928.orchestrator.log`。
+- `FACT`：排除每次 benchmark 首轮后，baseline 18 个 steady runs 的吞吐均值/中位数/CV 为 `9996.83 / 10305.75 tok/s / 13.0%`；candidate 为 `10320.11 / 10312.09 tok/s / 10.5%`。
+- `FACT`：candidate 相对 baseline 的总体中位吞吐仅 `+0.06%`，未达到预设的 `+5%`；总体均值约 `+3.2%`，不能作为稳定收益结论。
+- `FACT`：steady throughput 的经验 P90 为 baseline `10953.88`、candidate `11541.25 tok/s`。该指标只描述吞吐分布，不等价于 ITL 长尾；candidate 满足“P90 不超过 baseline×1.1”的宽松阈值，但不能据此证明尾延迟改善。
+- `FACT`：P99 ITL 的跨轮中位数为 baseline `83.47 ms`、candidate `83.70 ms`，candidate 约高 `0.28%`；Median ITL 均约 `79.7 ms`。
+- `INFERENCE`：candidate 的吞吐波动略小于 baseline，但中心位置基本相同；8-split 在 c16 下没有被本轮实验证明为有意义的端到端优化。
+- `DECISION`：不把 8-split 固化为默认提交策略；不按“c16 自动 4、c64 自动 8”的假设直接实现自适应。后续若继续，应先在 9032 做同条件的固定 4/固定 8/auto 三组对照，并把判断依据扩展到 prefill 请求数、最大 KV 长度和实际 mixed 形状。
+- `UNKNOWN`：本轮未覆盖官方 16k/128 请求/1024 输出、4k/256 请求、candidate Level 3、CUDA graph 回归及 kernel profiler；因此不能据此判断比赛正式负载收益。
+
+### 诊断准备 2026-09-28：dispatcher / Split-KV profiler probe
+
+- `FACT`：新增 `tests/dispatcher_profile_probe.py`，在同一 paged-KV mixed batch 上分别计时 native unified attention、raw Split-KV prefill 子批次和完整 dispatcher（Split-KV prefill + native decode + scatter）。
+- `FACT`：probe 通过 scheduler 已有的 `query_start_loc_cpu` 分组，不对 GPU `cu_seqlens_q` 执行 `.cpu().tolist()`；同时记录 `_request_partition`、`_token_indices`、`_subset_attention_kwargs`、optimized/native launch 的 CPU wall time。
+- `FACT`：probe 使用 `torch.profiler` 汇总 CUDA kernel、`aten::index_copy_`/拷贝事件、forward/reduce kernel 名称和 device time，并输出 JSON 与 TensorBoard trace 目录。
+- `FACT`：本地 `py_compile` 与 `git diff --check` 通过；未启动服务、未访问 9031/9032。
+- `PROBLEM`：当前本地 `ub39-fresh` ControlMaster 虽能返回 `ssh -O check` 的 “Master running”，但最小远端 `echo` 无回显，不能确认 mllv/GPU/9032 状态。
+- `DECISION`：在远端命令通道恢复前不发送 profiler 或 benchmark，不修改 9031/9032；恢复后先做只读状态检查，再运行单次 GPU 2 probe。
+- `UNKNOWN`：dispatcher CPU 分段、workspace/scatter、Split-KV forward/reduce、mixed kernel 的实际占比尚未取得设备证据。

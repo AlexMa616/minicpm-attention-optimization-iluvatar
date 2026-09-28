@@ -9,6 +9,7 @@ import math
 import os
 import statistics
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 
@@ -23,6 +24,7 @@ from vllm.v1.kv_cache_interface import KVQuantMode
 from vllm_fl.dispatch.backends.vendor.iluvatar.impl.attention import (
     _run_unified_attention,
 )
+from vllm_fl.dispatch.backends.vendor.iluvatar.impl import attention as iluvatar_attention
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,7 +137,20 @@ def main() -> None:
         query, cache, cu_q, seq_lens, block_table, candidate_out
     )
     candidate_kwargs["query_start_loc_cpu"] = cu_q.cpu()
-    _run_unified_attention(**candidate_kwargs)
+    with (
+        patch.object(
+            iluvatar_attention,
+            "_run_optimized_attention",
+            wraps=iluvatar_attention._run_optimized_attention,
+        ) as optimized,
+        patch.object(
+            iluvatar_attention,
+            "vllm_unified_attention",
+            wraps=iluvatar_attention.vllm_unified_attention,
+        ) as native,
+    ):
+        _run_unified_attention(**candidate_kwargs)
+    route_counts = {"optimized_prefill": optimized.call_count, "native_decode": native.call_count}
     candidate_time, candidate_samples = timed(
         lambda: _run_unified_attention(**candidate_kwargs),
         args.warmup,
@@ -146,6 +161,7 @@ def main() -> None:
         "prefix": args.prefix,
         "splits": args.splits,
         "prefill_index": args.prefill_index,
+        "route_counts": route_counts,
         "status": "ok",
         "candidate_ms": candidate_time,
         "native_ms": native_time,
@@ -157,7 +173,11 @@ def main() -> None:
         "max_abs_vs_sdpa": (candidate_out.float() - reference.float()).abs().max().item(),
         "mean_abs_vs_sdpa": (candidate_out.float() - reference.float()).abs().mean().item(),
     }
-    if result["max_abs_vs_sdpa"] > 0.05 or result["mean_abs_vs_sdpa"] > 0.001:
+    if (
+        result["max_abs_vs_sdpa"] > 0.05
+        or result["mean_abs_vs_sdpa"] > 0.001
+        or route_counts != {"optimized_prefill": 1, "native_decode": 1}
+    ):
         result["status"] = "fail"
     args.result.parent.mkdir(parents=True, exist_ok=True)
     args.result.write_text(json.dumps(result, sort_keys=True) + "\n")
