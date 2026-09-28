@@ -126,6 +126,26 @@ def profiler_events(profiler: torch.profiler.profile, limit: int = 40) -> list[d
     return rows[:limit]
 
 
+def profile_call(
+    call: Callable[[], Any], iterations: int, trace_dir: Path
+) -> list[dict[str, Any]]:
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        record_shapes=True,
+        profile_memory=False,
+        with_stack=False,
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(str(trace_dir)),
+    ) as profiler:
+        for _ in range(iterations):
+            call()
+            profiler.step()
+    return profiler_events(profiler)
+
+
 def main() -> None:
     args = parse_args()
     os.environ["ILUVATAR_USE_OPTIMIZED"] = "1"
@@ -258,6 +278,20 @@ def main() -> None:
             _run_unified_attention(**candidate_kwargs)
             profiler.step()
 
+    path_profiles = {
+        "native_full_mixed": profile_call(
+            lambda: unified_attention(**native_kwargs),
+            args.profile_iterations,
+            profile_target.parent / "native_full_mixed",
+        ),
+        "raw_split_kv_prefill": profile_call(
+            lambda: _run_optimized_attention(**prefill_kwargs),
+            args.profile_iterations,
+            profile_target.parent / "raw_split_kv_prefill",
+        ),
+        "dispatcher_partitioned": profiler_events(profiler),
+    }
+
     result = {
         "status": "ok",
         "device": str(device),
@@ -282,6 +316,7 @@ def main() -> None:
             "max_abs_vs_sdpa": candidate_sdpa_max_abs,
         },
         "profiler_top_events": profiler_events(profiler),
+        "path_profiler_top_events": path_profiles,
         "trace_directory": str(profile_target.parent),
     }
     if candidate_sdpa_max_abs > 0.05:
