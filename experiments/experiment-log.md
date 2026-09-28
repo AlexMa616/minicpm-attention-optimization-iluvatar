@@ -1065,3 +1065,17 @@
 - `CORRECTION`：此前 dispatcher wrapper 记录的 `15–24 ms/子批次` 受前序异步 GPU 工作/allocator 等待影响，不能作为 `_subset_attention_kwargs` 固有耗时；原“subset helper 是主要软件瓶颈”的判断撤回。
 - `INFERENCE`：完整 dispatcher 相对 raw Split-KV 的约 `3.1 ms`（8k）/`3.8 ms`（14k）差额主要来自 native decode 子调用、分流 launch/同步和少量 scatter，而非单一 `index_copy_` 或 metadata 构造。
 - `DECISION`：当前主线收敛到 mixed prefill Split-KV forward kernel；不再优先做 workspace 复用或 dispatcher 重写。下一步获取 BI-V150 kernel profiler 的带宽/占用数据，再决定 tile、KV 访问或并行度优化。
+
+### 实验 2026-09-28-09：BLOCK_M 定点扫描与 9032 隔离服务短测
+
+- 环境：ub39 `mllv`，GPU 2 微基准；服务 A/B 仅使用 GPU 1/端口 9032。9031 官方服务 PID `2943` 始终运行，健康检查保持 HTTP 200，未重启、未发送请求。
+- 微基准形状：`1 x 2048 prefill + 30 x 1 decode`，prefix `8192`/`14336`，`BLOCK_N=64`、4 split；所有结果通过 fp32 paged-SDPA 对拍，最大误差 `0.00048828125`（对 native 最大 `0.001953125`，14k `0.0029296875`）。
+- `FACT`：prefix 8192、4 split 的 raw Split-KV CUDA event 时间：`BLOCK_M=32: 49.87 ms`，`BLOCK_M=64: 38.57 ms`，`BLOCK_M=128: 24.05 ms`；同批 native mixed 分别约 `43.87/44.05/44.01 ms`。`BLOCK_M=128` 比 `BLOCK_M=64` 的 raw forward 约快 `37.6%`，比 native 约快 `45.3%`。
+- `FACT`：prefix 14336、4 split、`BLOCK_M=128` 的 raw Split-KV `36.27 ms`，native mixed `73.38 ms`，完整 dispatcher `40.26 ms`；说明长 KV 下大 tile 仍有明显 kernel 级收益，但 dispatcher 路径仍需服务级验证。
+- `CORRECTION`：`BLOCK_M=32` 的首次 JSON 由旧/不完整运行时导入得到 `49.87 ms`，后续 `BLOCK_M=64/128` 使用明确的 `/workspace/split_kv_repair_20260928` staging；因此只把三组在同一 staging 下重跑的 `64/128` 作为可比结论，`32` 仅作方向性参考。
+- `FACT`：9032 candidate 使用 `ILUVATAR_USE_OPTIMIZED=1`、`ILUVATAR_SPLIT_KV=1`、`ILUVATAR_NUM_SPLITS=4`、`BLOCK_M=128`、`BLOCK_N=64`，服务启动日志确认 `Op 'attention_backend' using 'vendor.iluvatar'`，CUDA graph capture 完成，健康检查 HTTP 200。
+- `FACT`：9032 candidate 在 `16384 input / 256 output / c16 / 16 prompts` 的 4 轮短测中，首轮总吞吐 `958.50 tok/s`；跳过首轮后的 3 轮汇总为 `10569.22 tok/s`，平均 TTFT 汇总 `4722.93 ms`。服务启动命令没有显式关闭 prefix caching，日志显示后续轮次命中率最高约 `74.9%`，因此这不是冷启动 benchmark。
+- `FACT`：同条件 baseline 的 3 个 steady runs 为 `9817.69/11529.50/10901.00 tok/s`，均值 `10749.40`、中位数 `10901.00`、CV `6.58%`；candidate steady runs 为 `9938.96/10256.21/11512.48 tok/s`，均值 `10569.22`、中位数 `10256.21`、CV `6.43%`。
+- `FACT`：candidate 相对 baseline 的 steady 均值为 `-1.68%`，steady 中位数为 `-5.91%`；两边首轮冷启动几乎相同（candidate `958.50`、baseline `958.90 tok/s`），不能把首轮差异归因于 kernel。稳态 Median ITL 约 `79.7 ms`，没有明显 decode 回归，但 candidate 没有达到 `+5%` 收益门槛。
+- `CORRECTION`：本轮结果只能表述为“同一 prefix-cache 行为下的 9032/GPU 1 c16 A/B”，不能称为无 prefix-cache或冷启动结果；若要测冷启动，必须在两边都显式关闭 prefix caching 并更换随机输入/重启服务。
+- `DECISION`：当前 `BLOCK_M=128 + 4-split dispatcher` 暂不进入正式提交，也不扩大到官方 128 请求或 Level 3。GPU 2 微基准收益没有转化为 c16 服务吞吐收益，下一步应先修正服务实验的 prefix-cache 控制并增加运行时路径计数/trace，确认 candidate 的 prefill 分流实际覆盖率，再决定是否继续 kernel 调优。
