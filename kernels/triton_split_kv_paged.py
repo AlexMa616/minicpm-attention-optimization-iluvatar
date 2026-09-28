@@ -248,15 +248,34 @@ def paged_split_kv_attention(
     """Run Split-KV on the exact flattened/paged vLLM attention ABI."""
     if q.ndim != 3 or k.ndim != 4 or v.ndim != 4:
         raise ValueError("expected q=[T,H,D] and k/v=[blocks,block,kv_heads,D]")
+    if q.device != k.device or q.device != v.device or q.device != out.device:
+        raise ValueError("q, k, v, and out must be on the same device")
+    if out.shape != q.shape or k.shape != v.shape:
+        raise ValueError("out must match q and k/v must have identical shapes")
     if num_splits not in (2, 4, 8, 16):
         raise ValueError("num_splits must be one of 2, 4, 8, 16")
     if block_table.dtype not in (torch.int32, torch.int64):
         raise ValueError("block_table must contain integer physical block ids")
+    if cu_seqlens_q.ndim != 1 or seqused_k.ndim != 1:
+        raise ValueError("cu_seqlens_q and seqused_k must be one-dimensional")
+    if cu_seqlens_q.numel() != seqused_k.numel() + 1:
+        raise ValueError("cu_seqlens_q must contain one entry per request plus one")
+    if block_table.shape[0] != seqused_k.numel():
+        raise ValueError("block_table and seqused_k must have the same request count")
 
     total_q, num_q_heads, head_dim = q.shape
     num_kv_heads = k.shape[2]
     block_size = k.shape[1]
-    if head_dim not in (64, 128, 256) or num_q_heads % num_kv_heads:
+    if (
+        head_dim not in (64, 128, 256)
+        or num_q_heads % num_kv_heads
+        or block_size <= 0
+        or block_size % 16
+        or block_m <= 0
+        or block_m % 16
+        or block_n <= 0
+        or block_n % 16
+    ):
         raise ValueError("unsupported head shape for paged Split-KV")
     if max_seqlen_q <= 0 or max_seqlen_k <= 0:
         return out.zero_()

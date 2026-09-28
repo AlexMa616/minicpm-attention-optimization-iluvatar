@@ -20,8 +20,10 @@ vLLM AttentionImpl
 
 The forward grid is logically `(request, query_head, query_block, kv_split)`.
 Because Triton exposes at most three grid axes, the implementation packs the
-last two dimensions into one launch axis and decodes them with integer
-division/modulo. Each program reads its request's query range from
+query-block and split dimensions into the three launch axes directly. The
+query-block list is compacted per request, so a one-token decode request does
+not inherit the prefill request's query-block count. Each program reads its
+request's query range from
 `cu_seqlens_q` and maps every KV position through `block_table`; it does not
 assume contiguous physical blocks or uniform query lengths.
 
@@ -46,6 +48,8 @@ The active kernel currently requires:
 - no sliding window, ALiBi, sinks, soft cap, or tensor-descriptor path;
 - `block_size` compatible with the paged-KV table;
 - `num_splits` in `{2, 4, 8, 16}`.
+- `BLOCK_M` and `BLOCK_N` are multiples of 16; the active implementation has
+  no independent `BLOCK_Q` parameter.
 
 Pure decode remains on native vLLM attention so the existing 3D segmented
 decode path is not changed by the prefill/mixed experiment.
@@ -66,6 +70,12 @@ current evidence does not establish a complete, correct BI-V150 implementation:
 The pre-audit code is retained as
 `reference/experimental_unvalidated_attention.py`; it is not imported by the
 active dispatcher or benchmark scripts.
+
+The vLLM integration must also remove the older untracked operator drafts
+from the vendor directory. Only `impl/attention.py`,
+`impl/ops/triton_split_kv_paged.py`, and
+`impl/ops/triton_unified_attention_optimized.py` belong to the active
+integration path.
 
 ## Validation Gates
 

@@ -45,8 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260927)
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--block-m", type=int)
-    parser.add_argument("--block-q", type=int)
-    parser.add_argument("--tile", type=int)
+    parser.add_argument("--block-n", type=int)
     parser.add_argument("--warmup", type=int)
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--repeats", type=int, default=5)
@@ -155,8 +154,7 @@ def run_attention(
     block_table: torch.Tensor,
     max_query_len: int,
     block_m: int,
-    block_q: int,
-    tile: int,
+    block_n: int,
     optimized: bool = True,
     warps: int | None = None,
     stages: int | None = None,
@@ -229,8 +227,7 @@ def run_attention(
     if optimized:
         kwargs.update(
             block_m_override=block_m,
-            block_q_override=block_q,
-            prefill_tile_override=tile,
+            block_n_override=block_n,
             launch_num_warps_override=warps,
             launch_num_stages_override=stages,
         )
@@ -266,8 +263,7 @@ def measure_case(
     query_lengths: list[int],
     prefix_lengths: list[int],
     block_m: int,
-    block_q: int,
-    tile: int,
+    block_n: int,
     warmup: int,
     iterations: int,
     repeats: int,
@@ -281,8 +277,7 @@ def measure_case(
         "query_tokens": query_lengths,
         "decode_sequences": sum(q == 1 for q in query_lengths),
         "block_m": block_m,
-        "block_q": block_q,
-        "tile_size": tile,
+        "block_n": block_n,
         "num_warps": warps,
         "num_stages": stages,
         "split_kv_mixed_enabled": os.getenv(
@@ -296,9 +291,6 @@ def measure_case(
         ),
         "status": "ok",
     }
-    if block_m != block_q * (NUM_Q_HEADS // NUM_KV_HEADS):
-        result.update({"status": "skip", "failure_reason": "inconsistent GQA tile"})
-        return result
     generator = torch.Generator(device=device).manual_seed(seed)
     query, cache, cu_seqlens, seq_lens, block_table = build_batch(
         device, query_lengths, prefix_lengths, generator
@@ -341,13 +333,13 @@ def measure_case(
             baseline_segment_workspace = make_decode_workspace(16)
         actual = run_attention(
             query, cache, cu_seqlens, seq_lens, block_table,
-            max(query_lengths), block_m, block_q, tile, True, warps, stages,
+            max(query_lengths), block_m, block_n, True, warps, stages,
             output, max_seqlen_k, segment_workspace, candidate_decode_segments,
         )
         baseline_output = torch.empty_like(query)
         baseline = run_attention(
             query, cache, cu_seqlens, seq_lens, block_table,
-            max(query_lengths), block_m, block_q, tile, False, warps, stages,
+            max(query_lengths), block_m, block_n, False, warps, stages,
             baseline_output, max_seqlen_k, baseline_segment_workspace, 16,
         )
         compile_seconds = time.perf_counter() - compile_start
@@ -370,18 +362,18 @@ def measure_case(
         for _ in range(warmup - 1):
             run_attention(
                 query, cache, cu_seqlens, seq_lens, block_table,
-                max(query_lengths), block_m, block_q, tile, True, warps, stages,
+                max(query_lengths), block_m, block_n, True, warps, stages,
                 output, max_seqlen_k, segment_workspace, candidate_decode_segments,
             )
             run_attention(
                 query, cache, cu_seqlens, seq_lens, block_table,
-                max(query_lengths), block_m, block_q, tile, False, warps, stages,
+            max(query_lengths), block_m, block_n, False, warps, stages,
                 baseline_output, max_seqlen_k, baseline_segment_workspace, 16,
             )
         samples, wall_samples = time_repeated(
             lambda: run_attention(
                 query, cache, cu_seqlens, seq_lens, block_table,
-                max(query_lengths), block_m, block_q, tile, True, warps, stages,
+                max(query_lengths), block_m, block_n, True, warps, stages,
                 output, max_seqlen_k, segment_workspace, candidate_decode_segments,
             ),
             iterations,
@@ -390,7 +382,7 @@ def measure_case(
         baseline_samples, baseline_wall_samples = time_repeated(
             lambda: run_attention(
                 query, cache, cu_seqlens, seq_lens, block_table,
-                max(query_lengths), block_m, block_q, tile, False, warps, stages,
+                max(query_lengths), block_m, block_n, False, warps, stages,
                 baseline_output, max_seqlen_k, baseline_segment_workspace, 16,
             ),
             iterations,
@@ -433,8 +425,7 @@ def measure_case(
                     p for q, p in zip(query_lengths, prefix_lengths) if q == 1
                 ],
                 block_m=block_m,
-                block_q=block_q,
-                tile=tile,
+                block_n=block_n,
                 warmup=max(2, warmup // 2),
                 iterations=max(3, iterations // 2),
                 repeats=repeats,
@@ -484,20 +475,13 @@ def main() -> None:
     device = set_device(args.device)
     torch.manual_seed(args.seed)
     rows: list[dict[str, Any]] = []
-    if args.block_m or args.block_q or args.tile:
-        candidates = [(
-            args.block_m or 128,
-            args.block_q or 16,
-            args.tile or 32,
-            args.warps,
-            args.stages,
-        )]
+    if args.block_m:
+        candidates = [(args.block_m, args.block_n or 64, args.warps, args.stages)]
     else:
         candidates = [
-            (m, q, tile, None, None)
+            (m, n, None, None)
             for m in config["block_m_candidates"]
-            for q in config["block_q_candidates"]
-            for tile in config.get("prefill_tile_candidates", [32])
+            for n in config.get("block_n_candidates", [64])
         ]
     cases: list[tuple[str, list[int], list[int]]] = []
     pure = config["pure_prefill"]
@@ -515,11 +499,11 @@ def main() -> None:
     args.result.parent.mkdir(parents=True, exist_ok=True)
     with args.result.open("w", encoding="utf-8") as output:
         for case_idx, (name, qlens, prefixes) in enumerate(cases):
-            for cand_idx, (block_m, block_q, tile, warps, stages) in enumerate(candidates):
+            for cand_idx, (block_m, block_n, warps, stages) in enumerate(candidates):
                 if args.check_only and case_idx > 0:
                     break
                 row = measure_case(
-                    device, name, qlens, prefixes, block_m, block_q, tile,
+                    device, name, qlens, prefixes, block_m, block_n,
                     args.warmup or config["warmup"],
                     args.iterations or config["iterations"],
                     args.repeats,

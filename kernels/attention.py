@@ -64,8 +64,6 @@ def iluvatar_attention(
     use_td: bool = False,
     # Optimization overrides (from harness)
     block_m_override: Optional[int] = None,
-    block_q_override: Optional[int] = None,
-    prefill_tile_override: Optional[int] = None,
     launch_num_warps_override: Optional[int] = None,
     launch_num_stages_override: Optional[int] = None,
     # RoPE parameters

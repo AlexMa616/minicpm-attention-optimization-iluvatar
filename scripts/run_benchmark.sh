@@ -40,7 +40,7 @@ python attention_harness.py \
 
 # Test 2: Split-KV optimization
 echo ""
-echo "Running Split-KV optimization test..."
+echo "Running repaired Split-KV optimization test..."
 ILUVATAR_USE_OPTIMIZED=1 \
 ILUVATAR_SPLIT_KV=1 \
 VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED=1 \

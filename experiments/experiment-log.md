@@ -960,3 +960,18 @@
 - `FACT`：forward/reduce 已改为按请求实际 query block 数压紧映射，并重新通过 6/6 correctness gate。
 - `UNKNOWN`：压紧映射后的 GPU 2 latency、编译资源和服务级收益尚未完成。
 - `DECISION`：继续只在 GPU 2 重测；9031/9032 不启动 candidate traffic，直到修复后 microbenchmark 有稳定结果。
+
+### 实验 2026-09-28-03：活动实现收口与可复现集成补丁
+
+- 时间：2026-09-28
+- 目标：清除未完成的概念性算子，保证活动路径只包含能够在 BI-V150 上对拍和复测的实现，并同步服务接入修复。
+- `FACT`：独立仓库活动实现继续只包含 paged Split-KV forward、online softmax partial-output/reduction、flattened variable-length query ABI、真实 `block_table` 索引和 GQA 映射。
+- `FACT`：RoPE fusion、warp specialization、ping-pong scheduling、TMA 及旧版 FA3/Split-KV 草稿不再属于活动路径；它们不具备本环境下完整的调用链、硬件语义或实测闭环，保留的历史草稿只位于 `reference/experimental_unvalidated_attention.py`。
+- `FACT`：删除 `vllm-plugin-FL` 工作树中未接入的 `attention_config.py`、`triton_fa3_kernels.py`、旧 Split-KV 变体和相关 ops 草稿；活动 vendor 目录只保留 `impl/attention.py`、`impl/ops/triton_split_kv_paged.py`、`impl/ops/triton_unified_attention_optimized.py` 及包初始化文件。
+- `FACT`：修复服务门控：只有同时设置 `ILUVATAR_USE_OPTIMIZED=1` 和 `ILUVATAR_SPLIT_KV=1` 才进入 candidate；否则使用原生 vLLM attention。该修复避免 baseline 仅因误留 `ILUVATAR_SPLIT_KV=1` 而污染。
+- `FACT`：移除没有实际 kernel 语义的独立 `BLOCK_Q`/prefill tile 参数；活动实现只接受 `BLOCK_M`、`BLOCK_N`、`num_splits`、`num_warps`、`num_stages`。
+- `FACT`：新增 host-side ABI 校验，检查设备、形状、请求数、`cu_seqlens_q`/`seqused_k`、block size 和 tile 对齐关系；通过后才发射 Triton kernel。
+- `FACT`：独立仓库新增 `integration/vllm-plugin-FL-split-kv.patch` 和 `integration/README.md`，包含 YAML 路由、Iluvatar backend 接入、双重门控和活动 kernel 文件，避免“本地修了但 GitHub 无法复现”。
+- 验证：本地 `py_compile` 已通过；GitHub 仓库文档、harness 配置和安装脚本已同步更新；插件工作树 `git diff --check` 通过。
+- 未完成：远端 SSH ControlMaster 当前可检查但执行命令无响应，故本轮没有重启 9032、没有发送 candidate 请求，也没有把修复后的性能写成结论；9031 未触碰。
+- 下一步最小命令：恢复可用 SSH 通道后，只读确认 mllv/9031/9032 状态；在 GPU 2 运行修复版 correctness 及 4/8 segments 复测，完成后才做 9032 隔离 A/B。
