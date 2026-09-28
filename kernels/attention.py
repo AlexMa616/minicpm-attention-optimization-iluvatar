@@ -18,18 +18,12 @@ except ImportError:
     VLLM_BASELINE_AVAILABLE = False
 
 # Import optimized kernels
-from .triton_unified_attention_optimized import (
-    unified_attention_optimized,
-    ENABLE_SPLIT_KV,
-    ENABLE_ROPE_FUSED,
-    ENABLE_WARP_SPEC,
-    ENABLE_PINGPONG,
-    ENABLE_TMA,
-)
+from .triton_unified_attention_optimized import unified_attention_optimized
 
 
 # Global flag to enable/disable optimized path
-USE_OPTIMIZED = os.environ.get("ILUVATAR_USE_OPTIMIZED", "1") == "1"
+USE_OPTIMIZED = os.environ.get("ILUVATAR_USE_OPTIMIZED", "0") == "1"
+ENABLE_SPLIT_KV = os.environ.get("ILUVATAR_SPLIT_KV", "0") == "1"
 
 
 def iluvatar_attention(
@@ -97,10 +91,17 @@ def iluvatar_attention(
     Returns:
         out: Filled output tensor [total_tokens, num_q_heads, head_dim]
     """
+    original_k, original_v = k, v
+    if k.ndim == 5 and v.ndim == 5:
+        # Standalone callers may pass vLLM's [blocks, 2, block, kv_heads, D]
+        # cache. The active kernel consumes the already-unbound K/V views.
+        k, v = k[:, 0], v[:, 1]
+
     # Fast path checks for unsupported features
     use_baseline = (
         not USE_OPTIMIZED
-        or not any([ENABLE_SPLIT_KV, ENABLE_TMA, ENABLE_PINGPONG, ENABLE_ROPE_FUSED])
+        or not ENABLE_SPLIT_KV
+        or max_seqlen_q <= 1
         or softcap != 0.0
         or kv_quant_mode != 0
         or alibi_slopes is not None
@@ -118,7 +119,7 @@ def iluvatar_attention(
             )
 
         return unified_attention(
-            q=q, k=k, v=v, out=out,
+            q=q, k=original_k, v=original_v, out=out,
             cu_seqlens_q=cu_seqlens_q,
             max_seqlen_q=max_seqlen_q,
             seqused_k=seqused_k,
@@ -149,48 +150,23 @@ def iluvatar_attention(
             use_td=use_td,
         )
 
-    # Optimized path
-    try:
-        return unified_attention_optimized(
-            q=q, k=k, v=v, out=out,
-            block_table=block_table,
-            seqused_k=seqused_k,
-            cu_seqlens_q=cu_seqlens_q,
-            max_seqlen_q=max_seqlen_q,
-            max_seqlen_k=max_seqlen_k,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            block_m_override=block_m_override,
-            block_q_override=block_q_override,
-            prefill_tile_override=prefill_tile_override,
-            launch_num_warps_override=launch_num_warps_override,
-            launch_num_stages_override=launch_num_stages_override,
-            cos_cache=cos_cache,
-            sin_cache=sin_cache,
-            rotary_dim=rotary_dim,
-            num_splits_override=num_par_softmax_segments,
-        )
-
-    except Exception as e:
-        # Fallback to baseline on any error
-        if VLLM_BASELINE_AVAILABLE:
-            import warnings
-            warnings.warn(
-                f"Optimized attention failed, falling back to baseline: {e}"
-            )
-            return unified_attention(
-                q=q, k=k, v=v, out=out,
-                cu_seqlens_q=cu_seqlens_q,
-                max_seqlen_q=max_seqlen_q,
-                seqused_k=seqused_k,
-                max_seqlen_k=max_seqlen_k,
-                softmax_scale=softmax_scale,
-                causal=causal,
-                window_size=window_size,
-                block_table=block_table,
-            )
-        else:
-            raise
+    # Do not hide candidate failures behind a baseline fallback during an
+    # experiment: a silent fallback would invalidate the measured result.
+    return unified_attention_optimized(
+        q=q, k=k, v=v, out=out,
+        block_table=block_table,
+        seqused_k=seqused_k,
+        cu_seqlens_q=cu_seqlens_q,
+        max_seqlen_q=max_seqlen_q,
+        max_seqlen_k=max_seqlen_k,
+        softmax_scale=softmax_scale,
+        causal=causal,
+        block_m_override=block_m_override or int(os.environ.get("ILUVATAR_BLOCK_M", "64")),
+        block_n_override=int(os.environ.get("ILUVATAR_BLOCK_N", "64")),
+        launch_num_warps_override=launch_num_warps_override or int(os.environ.get("ILUVATAR_NUM_WARPS", "4")),
+        launch_num_stages_override=launch_num_stages_override or int(os.environ.get("ILUVATAR_NUM_STAGES", "2")),
+        num_splits_override=int(os.environ.get("ILUVATAR_NUM_SPLITS", "4")),
+    )
 
 
 # Export for vLLM dispatcher

@@ -39,26 +39,24 @@ BACKUP_DIR="$TARGET_DIR/backup_$(date +%Y%m%d_%H%M%S)"
 echo "Creating backup at: $BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 
-if [ -f "$TARGET_DIR/attention.py" ]; then
-    cp "$TARGET_DIR/attention.py" "$BACKUP_DIR/"
-fi
 if [ -f "$TARGET_DIR/triton_unified_attention_optimized.py" ]; then
     cp "$TARGET_DIR/triton_unified_attention_optimized.py" "$BACKUP_DIR/"
+fi
+if [ -f "$TARGET_DIR/triton_split_kv_paged.py" ]; then
+    cp "$TARGET_DIR/triton_split_kv_paged.py" "$BACKUP_DIR/"
 fi
 
 # Copy optimized kernels
 echo "Installing optimized kernels..."
 cp kernels/triton_unified_attention_optimized.py "$TARGET_DIR/"
-cp kernels/attention.py "$TARGET_DIR/"
+cp kernels/triton_split_kv_paged.py "$TARGET_DIR/"
 
 echo ""
 echo "✅ Installation complete!"
 echo ""
-echo "To enable optimizations, set environment variables:"
+echo "To enable the validated Split-KV path, set environment variables:"
 echo "  export ILUVATAR_USE_OPTIMIZED=1"
 echo "  export ILUVATAR_SPLIT_KV=1"
-echo "  export ILUVATAR_ROPE_FUSED=1"
-echo "  export ILUVATAR_PINGPONG=1"
-echo "  export ILUVATAR_TMA=1  # Hopper GPU only"
+echo "  export ILUVATAR_NUM_SPLITS=4"
 echo ""
 echo "Backup saved at: $BACKUP_DIR"

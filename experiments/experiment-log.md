@@ -942,3 +942,21 @@
 - `FACT`：已发送 `ssh -O exit` 关闭无响应的本地 ControlMaster，避免继续把“master 进程存活”误判为可用连接。
 - `PROBLEM`：当前没有可验证的远端 mllv/9032/GPU 状态，因此不能安全启动 A/B 或发送 benchmark 请求。
 - `DECISION`：等待用户在 iTerm 重建 SSH ControlMaster；恢复后严格按只读检查 → 确认 9032 空闲 → 原生/4-segment/8-segment 随机短 A/B 的顺序继续，9031 保持不动。
+
+### 实验 2026-09-28：Split-KV ABI 审计与活动路径收敛
+
+- `FACT`：独立仓库原活动文件 `kernels/triton_unified_attention_optimized.py` 已按原始提交哈希归档为 `reference/experimental_unvalidated_attention.py`；其中 RoPE fusion、warp specialization、ping-pong 和 TMA 没有 BI-V150 实测闭环，不能继续作为活动优化或性能声明。
+- `FACT`：新增 `triton_split_kv_paged.py`，使用 vLLM flattened query、`cu_seqlens_q`、非连续 `block_table` 和真实 paged-KV strides；forward launch 将 `(query_block, split)` 打包到 Triton 的第三个 grid 轴，避免原实现四维 grid 与未读取 `program_id(3)` 的重复执行风险。
+- `FACT`：Split-KV 仅允许 causal、未量化、无滑窗/ALiBi/sinks/softcap 的 prefill/mixed 路径；纯 decode 和不支持条件继续使用原生 vLLM attention。
+- `FACT`：README、`docs/architecture.md`、`scripts/run_benchmark.sh` 和安装脚本已更新，不再启用或宣称未验证的四类优化；新增 `tests/test_paged_split_kv.py` 覆盖随机物理 block table、非均匀 query 长度、非对齐边界和 4/8 segments。
+- `INFERENCE`：此前 GPU 2 的 `2.15–2.43x` Split-KV 微基准结果属于修复前实现/ABI 口径，不能直接作为修复后性能证据，必须重跑。
+- `UNKNOWN`：修复后 Triton kernel 在 BI-V150 的编译、数值误差和服务级收益尚未验证。
+- `DECISION`：先在 GPU 2 运行 `tests/test_paged_split_kv.py`；正确性通过后再运行 4/8 segments 微基准，最后才重启 9032 做短 A/B。9031 不停止、不重启、不发送请求。
+
+### 实验 2026-09-28-02：修复版 correctness gate 与 launch mapping
+
+- `FACT`：远端 `/workspace/split_kv_repair_20260928` 中修复版 paged Split-KV correctness gate 通过 6/6 组，覆盖随机物理 block table、非均匀 query 长度、非对齐边界和 4/8 segments；最大误差 `0.015625`，平均误差约 `3e-4`。
+- `FACT`：首次 mixed 微基准发现按 `max_query_len` 为所有请求发射 query blocks 会让 `1x2048 + 30x1` 候选达到 `1110.29 ms`，native 为 `43.95 ms`；这是 launch mapping 缺陷，不是性能结论。
+- `FACT`：forward/reduce 已改为按请求实际 query block 数压紧映射，并重新通过 6/6 correctness gate。
+- `UNKNOWN`：压紧映射后的 GPU 2 latency、编译资源和服务级收益尚未完成。
+- `DECISION`：继续只在 GPU 2 重测；9031/9032 不启动 candidate traffic，直到修复后 microbenchmark 有稳定结果。

@@ -1,180 +1,104 @@
 # MiniCPM Attention Optimization for Iluvatar BI-V150
 
----
+This repository contains the validated Split-KV attention work for
+MiniCPM5-2B on Iluvatar BI-V150. It is a research and integration artifact;
+numbers are not official competition results until they are reproduced with
+the official service command and workload.
 
-<a name="english"></a>
+## Active Implementation
 
+The active path contains only optimizations implemented against the vLLM
+paged-KV ABI:
 
-High-performance attention kernel optimizations for **MiniCPM5-2B** inference on **Iluvatar BI-V150 GPU**, achieving 1.5-2.5x throughput improvements through advanced tiling strategies and memory optimization techniques.
+- Split-KV forward tiling over the KV axis;
+- online softmax statistics `(m, l)` per split;
+- numerically stable reduction over split outputs;
+- flattened variable-length query addressing through `cu_seqlens_q`;
+- physical block lookup for every KV lane through `block_table`;
+- GQA mapping for MiniCPM5-2B (`16` query heads, `2` KV heads).
 
-### 🎯 Performance Targets
+The active kernel is opt-in. Unsupported paths and pure decode remain on
+vLLM's native unified attention implementation.
 
-| Workload | Baseline | Optimized | Speedup |
-|----------|----------|-----------|---------|
-| **Prefill (2K tokens)** | ~17 TFLOP/s | **25-30 TFLOP/s** | **1.5-1.8x** |
-| **Mixed Batch (14K tokens)** | ~7.25 TFLOP/s | **12-15 TFLOP/s** | **1.7-2.0x** |
-| **Long Context (8K+)** | Limited by SM utilization | Split-KV parallelism boost | **2.0-2.5x** |
-| **Hopper GPU (TMA)** | N/A | Theoretical additional gain | **+10-15%** |
+## Explicitly Not Active
 
-### 🔧 Technical Approach
+The previous RoPE-fusion, warp-specialization, ping-pong, and TMA sketches are
+kept under `reference/experimental_unvalidated_attention.py` for historical
+comparison only. They are not imported by the active dispatcher, not enabled
+by the benchmark scripts, and not included in performance claims:
 
-#### Core Optimizations (Implementation)
+- RoPE fusion needs integration with the actual Q/RoPE and KV-cache write
+  path before it can be correct;
+- Triton `num_stages` is not proof of warp specialization or asynchronous
+  producer/consumer execution on BI-V150;
+- TMA is Hopper-specific and BI-V150 is not a Hopper target;
+- ping-pong scheduling has no independently validated device-side staging
+  implementation in this repository.
 
-1. **Split-KV 3D Tiling** 
-   - Partition KV dimension into K chunks for independent processing
-   - Increase parallelism: O(B×H) → O(B×H×K)
-   - Online softmax reduction for numerical stability
+## Repository Layout
 
-2. **RoPE Fusion** 
-   - Inline rotary position encoding during attention computation
-   - Reduce HBM bandwidth by avoiding separate RoPE pass
-
-3. **Warp Specialization** 
-   - Producer-consumer pattern with async prefetch
-   - Overlap memory loads with computation
-   - Explicit warp-level barrier synchronization
-
-4. **Pingpong Scheduling** 
-   - Double-buffering with A/B staging areas
-   - Hide memory latency behind compute
-
-5. **TMA Integration** 
-   - Hopper architecture acceleration (SM 9.0+)
-   - Tensor Memory Accelerator for efficient global→shared transfers
-   - Automatic fallback for non-Hopper GPUs
-
-6. **Unified Routing + Autotuning** 
-   - Intelligent kernel selection based on workload characteristics
-   - Cached configuration for (seq_q, seq_k, head_dim) signatures
-   - Feature flag control with priority ordering
-
-### 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  vLLM Service (Iluvatar Backend)                        │
-├─────────────────────────────────────────────────────────┤
-│  attention.py (Dispatcher)                              │
-│  ├─ Feature detection (TMA, Split-KV, RoPE, Pingpong)  │
-│  ├─ Workload analysis (seq_len, context_len, batch)    │
-│  └─ Fallback to baseline if unsupported                │
-├─────────────────────────────────────────────────────────┤
-│  unified_attention_optimized() (Main Entry)             │
-│  ├─ KernelSelector: choose optimal kernel              │
-│  ├─ AutotuneConfig: cached tuning parameters           │
-│  └─ Route to: TMA / Split-KV / RoPE / Pingpong         │
-├─────────────────────────────────────────────────────────┤
-│  Triton JIT Kernels                                     │
-│  ├─ _split_kv_forward_kernel (3D tiling)               │
-│  ├─ _split_kv_reduce_kernel (online softmax)           │
-│  ├─ _rope_fused_attention_kernel                       │
-│  ├─ _warp_specialized_attention_kernel                 │
-│  ├─ _pingpong_attention_kernel (double-buffer)         │
-│  └─ _tma_attention_kernel (Hopper)                     │
-└─────────────────────────────────────────────────────────┘
+```text
+kernels/
+  triton_split_kv_paged.py              # active paged Split-KV kernels
+  triton_unified_attention_optimized.py # compatibility entry point
+  attention.py                          # opt-in standalone dispatcher
+reference/
+  experimental_unvalidated_attention.py # archived pre-audit design
+tests/
+  attention_harness.py                  # correctness and timing harness
+scripts/
+  install_to_vllm.sh                    # copies active kernel files only
+experiments/
+  experiment-log.md                     # evidence and decisions
 ```
 
-### 🚀 Quick Start
-
-#### 1. Installation
+## Environment Variables
 
 ```bash
-# Clone repository
-git clone https://github.com/AlexMa616/minicpm-attention-optimization-iluvatar.git
-cd minicpm-attention-optimization-iluvatar
+export ILUVATAR_USE_OPTIMIZED=1
+export ILUVATAR_SPLIT_KV=1
+export ILUVATAR_NUM_SPLITS=4       # 2, 4, 8, or 16
+export ILUVATAR_BLOCK_M=64
+export ILUVATAR_BLOCK_N=64
+export ILUVATAR_NUM_WARPS=4
+export ILUVATAR_NUM_STAGES=2
+```
 
-# Install dependencies
-pip install torch triton vllm
+The optimization must not be enabled for quantized KV cache, sliding-window
+attention, ALiBi/sinks, non-causal attention, or pure decode. Those cases use
+the native vLLM path in the plugin integration.
 
-# Copy kernels to vLLM plugin directory
+## Validation Order
+
+1. Run the harness correctness check against fp32 paged-SDPA.
+2. Include a permuted physical `block_table`, non-uniform query lengths, and
+   chunk boundaries that are not aligned to the tile size.
+3. Compare Split-KV 4 and 8 against native vLLM attention on GPU 2.
+4. Run an isolated service A/B on 9032 with profiler disabled.
+5. Only after the short A/B passes, run the official 4k/16k benchmark and
+   Level 3 accuracy. The official 9031 service must remain untouched.
+
+The harness reports CUDA-event latency, wall latency, numerical error, and
+the causal FLOP estimate. Microbenchmark speedup is not service throughput.
+
+## Installation
+
+```bash
 ./scripts/install_to_vllm.sh
 ```
 
-#### 2. Enable Optimizations
+The script copies only active kernel files into an existing vLLM plugin
+checkout. Backend registration and dispatch configuration remain explicit
+plugin changes and are not silently monkey-patched by this repository.
 
-```bash
-# Enable all optimizations
-export ILUVATAR_USE_OPTIMIZED=1
-export ILUVATAR_SPLIT_KV=1
-export ILUVATAR_ROPE_FUSED=1
-export ILUVATAR_PINGPONG=1
-export ILUVATAR_TMA=1  # Hopper GPU only
+## Evidence Status (September 28, 2026)
 
-# Run vLLM service
-python -m vllm.entrypoints.api_server \
-  --model openbmb/MiniCPM5-2B \
-  --tensor-parallel-size 1 \
-  --gpu-memory-utilization 0.9
-```
+- Official Iluvatar baseline: `1983.45 tok/s` at 4k and `917.83 tok/s` at
+  16k; Level 3: `102/105 = 97.1%`.
+- Earlier Split-KV numbers came from a pre-audit harness and are exploratory;
+  they must be re-run after the paged-KV and variable-length ABI fixes.
+- No README target value is presented as a measured result.
 
-#### 3. Standalone Benchmarking
-
-```bash
-cd tests
-
-# Test Split-KV optimization
-VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED=1 \
-python attention_harness.py \
-  --config configs/attention_test.json \
-  --device cuda:0 \
-  --result ../experiments/results/split_kv.jsonl \
-  --split-kv-mixed \
-  --split-kv-segments 4
-
-# Performance comparison
-python attention_harness.py \
-  --config configs/attention_test.json \
-  --device cuda:0 \
-  --result ../experiments/results/baseline_vs_optimized.jsonl \
-  --shape mixed \
-  --repeats 10
-```
-
-### 📊 Hardware Profile
-
-**Iluvatar BI-V150 Specifications:**
-- **Compute Units:** 80 Streaming Multiprocessors (SMs)
-- **Shared Memory:** 164 KB per SM
-- **HBM Bandwidth:** 2000 GB/s
-- **FP16 Throughput:** ~160 TFLOPS (theoretical peak)
-- **Block Size:** 16 tokens (paged KV cache)
-
-### 📚 Documentation
-
-- [Architecture Design](docs/architecture.md) - Detailed technical design
-- [Performance Analysis](docs/performance.md) - Benchmark results and bottleneck analysis
-- [Integration Guide](docs/integration-guide.md) - vLLM plugin installation
-- [Hardware Profile](docs/hardware-profile.md) - BI-V150 characteristics
-
-### 🔗 References
-
-This project implements custom optimizations inspired by:
-- **FlashAttention-2:** Dao et al., "FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning"
-- **FlashAttention-3:** Shah et al., "FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision"
-- **vLLM:** Kwon et al., "Efficient Memory Management for Large Language Model Serving with PagedAttention"
-
-### 📝 Citation
-
-If you use this work in your research, please cite:
-
-```bibtex
-@software{minicpm_attention_optimization_2026,
-  title = {MiniCPM Attention Optimization for Iluvatar BI-V150},
-  author = {Your Name},
-  year = {2026},
-  url = {https://github.com/YOUR_USERNAME/minicpm-attention-optimization-iluvatar}
-}
-```
-
-### 📄 License
-
-MIT License - See [LICENSE](LICENSE) for details.
-
----
-
-<a name="chinese"></a>
-- [硬件特性](docs/hardware-profile.md) - BI-V150参数
-
-### 📄 许可证
-
-MIT License - 详见[LICENSE](LICENSE)
+See [docs/architecture.md](docs/architecture.md) and
+[experiments/experiment-log.md](experiments/experiment-log.md) for the
+implementation contract and evidence trail.

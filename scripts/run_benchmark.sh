@@ -54,32 +54,16 @@ python attention_harness.py \
     --warmup "$WARMUP" \
     --iterations "$ITERATIONS"
 
-# Test 3: Pingpong optimization
 echo ""
-echo "Running Pingpong optimization test..."
-ILUVATAR_USE_OPTIMIZED=1 \
-ILUVATAR_PINGPONG=1 \
-python attention_harness.py \
-    --config configs/attention_test.json \
-    --device "$DEVICE" \
-    --result "$RESULT_DIR/pingpong.jsonl" \
-    --repeats "$REPEATS" \
-    --warmup "$WARMUP" \
-    --iterations "$ITERATIONS"
-
-# Test 4: All optimizations enabled
-echo ""
-echo "Running full optimization test..."
+echo "Running Split-KV configuration comparison..."
 ILUVATAR_USE_OPTIMIZED=1 \
 ILUVATAR_SPLIT_KV=1 \
-ILUVATAR_ROPE_FUSED=1 \
-ILUVATAR_PINGPONG=1 \
-ILUVATAR_TMA=1 \
+ILUVATAR_NUM_SPLITS=8 \
 VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED=1 \
 python attention_harness.py \
     --config configs/attention_test.json \
     --device "$DEVICE" \
-    --result "$RESULT_DIR/full_optimized.jsonl" \
+    --result "$RESULT_DIR/split_kv_8.jsonl" \
     --split-kv-mixed \
     --split-kv-segments 4 \
     --repeats "$REPEATS" \
