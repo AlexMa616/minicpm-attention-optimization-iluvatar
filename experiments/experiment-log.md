@@ -1041,3 +1041,17 @@
 - `PROBLEM`：当前本地 `ub39-fresh` ControlMaster 虽能返回 `ssh -O check` 的 “Master running”，但最小远端 `echo` 无回显，不能确认 mllv/GPU/9032 状态。
 - `DECISION`：在远端命令通道恢复前不发送 profiler 或 benchmark，不修改 9031/9032；恢复后先做只读状态检查，再运行单次 GPU 2 probe。
 - `UNKNOWN`：dispatcher CPU 分段、workspace/scatter、Split-KV forward/reduce、mixed kernel 的实际占比尚未取得设备证据。
+
+### 实验 2026-09-28-07：GPU 2 dispatcher / Split-KV profiler
+
+- 环境：ub39 `mllv`，GPU 2；9031 官方服务 PID `2943` 保持运行，9032 未启动。结果目录：`/workspace/logs/dispatcher_profile_20260928/`。
+- 形状：`1 x 2048 prefill + 30 x 1 decode`，前缀分别为 `8192` 和 `14336`，`BLOCK_M=64`、`BLOCK_N=64`。所有路径使用同一输入和 paged-KV table；结果均通过正确性门槛，最大误差对 fp32 SDPA 为 `0.00048828125`。
+- `FACT`（8k, 4 split）：native full mixed `43.99 ms`，完整 dispatcher `41.92 ms`，raw Split-KV prefill `38.81 ms`。独立 probe 中 dispatcher 相对 native 约 `+4.7%`，不等价于服务收益。
+- `FACT`（8k, 8 split）：native `43.99 ms`，dispatcher `42.60 ms`，raw Split-KV `39.75 ms`；相对 4 split，forward 约慢 `3.0%`，reduction 约 `0.36 ms/call`，没有显示增加 split 的收益。
+- `FACT`（14k, 4 split）：native `73.52 ms`，完整 dispatcher `63.07 ms`，raw Split-KV prefill `59.23 ms`；独立 probe 中 dispatcher 相对 native 约 `+16.6%`。
+- `FACT`：profiler kernel 时间（每次调用折算）显示 8k/4 split 的 Split-KV forward 约 `37.95 ms`，native mixed kernel 约 `46.71 ms`，reduction 约 `0.30 ms`；14k/4 split forward 约 `60.01 ms`，native 约 `78.24 ms`，reduction 约 `0.30 ms`。reduction 没有随长 KV 成为主耗时。
+- `FACT`：`index_copy_` CUDA 时间约 `0.09 ms/call`；`_request_partition` CPU 时间约 `0.02–0.03 ms/call`，`_token_indices` 每个子批次约 `0.2 ms`。这些都不是主要瓶颈。
+- `FACT`：`_subset_attention_kwargs` 的 CPU wall 计时约 `15.5 ms/子批次`（8k）和 `23.8 ms/子批次`（14k），明显高于 metadata partition；它包含 device `index_select`、新建 `cu_seqlens`/request index、workspace 分配等，当前是主要 dispatcher 软件开销候选。
+- `INFERENCE`：Split-KV forward 本体在独立 mixed shape 上比 native mixed kernel 快约 `19%`（8k）和 `23%`（14k），但 dispatcher 重组和 native decode 子调用吞掉部分收益；8 split 只增加开销，没有改善中心时延。
+- `UNKNOWN`：`_subset_attention_kwargs` 内部具体是 q/index_select、KV metadata index_select、workspace 分配还是 allocator 同步占主导；需要下一轮逐操作 CUDA event/CPU 计时，不应把 profiler 的累计 `aten::copy_` CPU 时间直接等同于服务墙钟开销。
+- `DECISION`：停止继续扫描 split 数；下一步优先做“无子批次复制/无每层 workspace 分配”的 dispatcher 原型测量，再评估是否保留 Split-KV kernel。暂不启动 9032，不做官方负载和 Level 3。
