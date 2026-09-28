@@ -1010,3 +1010,10 @@
 - `RISK`：原型每次调用对 GPU `cu_seqlens_q` 做 `.cpu().tolist()`，强制 host 同步；还在每层构建新索引、工作区并执行 scatter。当前探针不覆盖 CUDA graph capture 和正式调度，不能直接作为可提交实现或启动 9032 A/B。若继续，必须从 scheduler/metadata 获得无需 GPU→CPU 同步的分组信息，且验证图捕获、各种请求排列和 workspace 语义。
 - 问题：14k 和 8-split dispatcher 补测命令发出时，SSH 控制连接连续超时；没有对应 `.txt`/`.exit` 产物，不能假定执行或成功。已停止重复调用。候选默认不开启，本地插件工作区变脏；GitHub 的已推送集成补丁**不包含**这个原型，仍对应旧 `a175b28`。当前不推送原型、不宣称已同步正式修复。
 - 决策：保留 8k 探针作为原因辨析，停止原 Split-KV 整批 candidate 的服务验证；先解决无同步分组与 2D prefill 的内核效率，再做 GPU 2 完整对拍，最后考虑 9032。不得触碰 9031。
+
+#### 本地后续修正（尚未 GPU 复验）
+
+- `FACT`：固定插件的 `model_runner.py` 创建 `CommonAttentionMetadata` 时已有 `query_start_loc_cpu=self.query_start_loc.cpu[...]`。诊断原型已改从该 CPU metadata 传入 vendor backend，缺失或非 CPU 时安全回退 native，不再对 GPU `cu_seqlens_q` 执行 `.cpu().tolist()`。
+- `FACT`：原型先前按全局 token index 对 `softmax_segm_*` 做 `index_select`；真实 vendor backend 的 scratch 只分配 `seq_threshold_3D` 行（本场景约 64），可能在 2048-token prefill 中越界。现在 prefill 子调用不用 3D scratch，decode 子调用只取前 `num_decode_requests` 行。诊断探针同步改为真实 64 行 scratch，并增加 `--prefill-index` 检查非首行 prefill 和数值失败阈值。
+- `UNKNOWN`：这些新改动仅经本地 `py_compile`/`git diff --check`，由于 SSH 命令连续超时，未完成 GPU 2 复验；之前 `1.010x` 只适用于旧诊断原型，不能移植到当前版本。每层索引构建、scatter 和 CUDA graph 仍须验证，当前不发布插件分流代码、不启用 9032。
+- GitHub `main` 的 `438c0ec` 已同步本轮交叉复测数据和初版诊断探针；后续诊断脚本/记录可同步，但未经设备复验的插件修正不得加入正式集成补丁。已发布的 `integration/vllm-plugin-FL-split-kv.patch` 仍是旧的整批 Split-KV 候选，不包含分流原型。

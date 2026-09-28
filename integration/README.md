@@ -19,6 +19,12 @@ fusion pass on non-ROCm platforms; simply adding a vendor method would not
 make the service use it. The Split-KV patch is also an experimental candidate,
 not an instruction to deploy it after the repaired 8k latency regression.
 
+`tests/dispatcher_mixed_probe.py` is a diagnostic for an unpublished local
+mixed-batch partitioning prototype. The patch below does **not** contain that
+prototype: applying it and running the probe would only exercise the older
+whole-batch Split-KV route. The corrected CPU-metadata and service scratch
+semantics still require GPU 2 correctness and graph-compatibility checks.
+
 Apply the reviewable patch from the root of a clean checkout at the pinned
 `flagos-2026-s2` commit:
 

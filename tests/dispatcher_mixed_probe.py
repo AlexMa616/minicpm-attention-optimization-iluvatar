@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:2")
     parser.add_argument("--prefix", type=int, default=8192)
     parser.add_argument("--splits", type=int, default=4)
+    parser.add_argument("--prefill-index", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=5)
@@ -38,15 +39,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def make_kwargs(query, cache, cu_q, seq_lens, block_table, out):
-    total_tokens = query.shape[0]
     head_size_padded = 1 << (HEAD_SIZE - 1).bit_length()
     segment_output = torch.empty(
-        (total_tokens, NUM_Q_HEADS, 16, head_size_padded),
+        (64, NUM_Q_HEADS, 16, head_size_padded),
         device=query.device,
         dtype=torch.float32,
     )
     segment_max = torch.empty(
-        (total_tokens, NUM_Q_HEADS, 16), device=query.device, dtype=torch.float32
+        (64, NUM_Q_HEADS, 16), device=query.device, dtype=torch.float32
     )
     return dict(
         q=query,
@@ -109,7 +109,10 @@ def main() -> None:
     device = torch.device(args.device)
     torch.cuda.set_device(device)
     generator = torch.Generator(device=device).manual_seed(20260928)
-    query_lengths = [2048] + [1] * 30
+    if not 0 <= args.prefill_index < 31:
+        raise ValueError("prefill-index must be between 0 and 30")
+    query_lengths = [1] * 31
+    query_lengths[args.prefill_index] = 2048
     prefix_lengths = [args.prefix] * len(query_lengths)
     query, cache, cu_q, seq_lens, block_table = build_batch(
         device, query_lengths, prefix_lengths, generator
@@ -131,6 +134,7 @@ def main() -> None:
     candidate_kwargs = make_kwargs(
         query, cache, cu_q, seq_lens, block_table, candidate_out
     )
+    candidate_kwargs["query_start_loc_cpu"] = cu_q.cpu()
     _run_unified_attention(**candidate_kwargs)
     candidate_time, candidate_samples = timed(
         lambda: _run_unified_attention(**candidate_kwargs),
@@ -141,6 +145,7 @@ def main() -> None:
     result = {
         "prefix": args.prefix,
         "splits": args.splits,
+        "prefill_index": args.prefill_index,
         "status": "ok",
         "candidate_ms": candidate_time,
         "native_ms": native_time,
@@ -152,9 +157,13 @@ def main() -> None:
         "max_abs_vs_sdpa": (candidate_out.float() - reference.float()).abs().max().item(),
         "mean_abs_vs_sdpa": (candidate_out.float() - reference.float()).abs().mean().item(),
     }
+    if result["max_abs_vs_sdpa"] > 0.05 or result["mean_abs_vs_sdpa"] > 0.001:
+        result["status"] = "fail"
     args.result.parent.mkdir(parents=True, exist_ok=True)
     args.result.write_text(json.dumps(result, sort_keys=True) + "\n")
     print(json.dumps(result, sort_keys=True), flush=True)
+    if result["status"] != "ok":
+        raise AssertionError("dispatcher result exceeds the fp32 SDPA tolerance")
 
 
 if __name__ == "__main__":
