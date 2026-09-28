@@ -975,3 +975,18 @@
 - 验证：本地 `py_compile` 已通过；GitHub 仓库文档、harness 配置和安装脚本已同步更新；插件工作树 `git diff --check` 通过。
 - 未完成：远端 SSH ControlMaster 当前可检查但执行命令无响应，故本轮没有重启 9032、没有发送 candidate 请求，也没有把修复后的性能写成结论；9031 未触碰。
 - 下一步最小命令：恢复可用 SSH 通道后，只读确认 mllv/9031/9032 状态；在 GPU 2 运行修复版 correctness 及 4/8 segments 复测，完成后才做 9032 隔离 A/B。
+
+### 实验 2026-09-28-04：修复后 Split-KV 回归与 RoPE Fusion 可行性
+
+- 平台/设备：ub39、mllv、Iluvatar BI-V150 GPU 2；9031 和 9032 在只读检查时均 HTTP 200，9032 的队列与 KV 使用率为 0。没有重启服务或给 9031 发送 candidate 请求。
+- 目标：读取已完成的修复版结果，确定 RoPE fusion 与 warp specialization 是否能在固定框架内成为真实而非概念性的服务优化。
+- `FACT`：此前后台实验 `/workspace/logs/split_kv_repaired_gpu2_20260928/segments_4_prefix_8192_fixed.jsonl` 已完成。形状为 1×2048 prefill + 30×1 decode、前缀 8192、split=4；candidate CUDA-event median `75.886 ms`，native `44.022 ms`，speedup `0.580x`；对 fp32 paged-SDPA 参考的最大误差 `0.00048828125`。单次探针不代表跨时段置信区间，但已足以阻止直接部署该 candidate。此前 2.15–2.43x 数据属于修复前代码，不能转用于修复后版本。
+- `FACT`：审计发现 `tests/attention_harness.py` 的 baseline 命名曾与真实路由不一致，pure-decode 探针也曾直调 Split-KV；已修正为 baseline 模式只调 native、candidate 只在 prefill/mixed 调修复版，pure decode 恒用 native；数值门槛由两种误差同时超标才失败修正为任意一种超标即失败。`scripts/run_benchmark.sh` 现在按 4/8 splits 指定参数，并使用单次对照中的同一输入。
+- `FACT`：新建 `kernels/triton_rope_kv_cache.py`，在单次 GPU launch 内完成 Q 原位旋转、K 旋转后按 slot 写入 paged cache、V 写入 cache；覆盖 NeoX 与 interleaved、rotary_dim=64/128、负 slot。独立脚本 `tests/test_rope_kv_cache.py` 在 GPU 2 首轮 3/4 通过、第四组 max error 0.03125；旋转乘加显式提升至 fp32 后复测 4/4 通过，Q/K/V 与参考结果的最大绝对误差均为 0。
+- `FACT`：容器安装的 vLLM 0.24.0 中 `RopeKVCacheFusionPass` 仅当 `pass_config.fuse_rope_kvcache` 为真才注册；`vllm/config/compilation.py:283-288` 对非 ROCm 平台强制将该 flag 改为 False。MiniCPM 模型先执行 `self.rotary_emb(positions,q,k)` 再调用 attention；当前 BI-V150 的 `rocm_aiter_ops.is_enabled()` 为 None。因此独立 kernel 的正确性不等于服务可达，更不等于吞吐收益。
+- `DECISION`：撤销插件中尝试加入的 RoPE 导入/开关/路由，插件工作区回到先前 commit；独立 RoPE kernel 只以研究原型形式保留在 GitHub 仓库，尚未进入服务或比赛提交。不能在 attention 对已旋转 Q/K 再旋转，也不在固定 vLLM 本体里绕过平台门禁。
+- `FACT`：旧版 Warp Specialization/Pingpong 只展示 `num_warps`、`num_stages`、普通 `tl.load` 与占位 barrier，没有经生成代码或 BI-V150 实测证实 producer/consumer warp 分工、异步访存或双缓冲。TMA 为 Hopper 特性，当前 BI-V150 不具备可验证的等价路径。
+- `INFERENCE`：RoPE+cache 融合在技术上可完成且已数值通过，但该调用链的比赛合规集成点不在插件可控范围；即使可达，它优化的是 RoPE/cache 写入，不足以解释 profiler 中 16k attention 自身 92.87% 的 GPU 时间。Warp/Pingpong 可以转为具体的软件流水线或 tile 优化假设，不能先以硬件 FlashAttention-3 特性计分。
+- 遇到的问题：SSH ControlMaster 可检查但远端命令间歇性超时；`scp` 经 bastion 无法写入映射目标，改用 `tar | ssh docker exec -i tar` 将文件传入 staging。没有覆盖 `/workspace/vllm-plugin-FL` 官方服务源目录。
+- 未完成：修正后的 harness 尚未在 GPU 2 跑完整 4/8、8k/14k 交叉复测；RoPE 尚未做公平的内核延迟对照或服务路由验证。当前不能声称任何新的服务性能收益。
+- 下一步：仅在 SSH 稳定时先对 staging 的修复版跑 4/8 split 同形状微基准；若仍慢于 native，停止该候选并回到 2D prefill 真实 tile/profile。RoPE 若未来获得规则许可修改框架编译 pass，再独立设计公平 A/B；此前不让它进入 9032。

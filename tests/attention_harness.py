@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 
 from vllm.v1.kv_cache_interface import KVQuantMode
 from vllm.v1.attention.ops.triton_unified_attention import unified_attention
@@ -55,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--split-kv-mixed",
         action="store_true",
-        help="force the experimental 3D split-KV path for mixed batches",
+        help="compare the repaired Split-KV candidate with native attention",
     )
     parser.add_argument("--split-kv-segments", type=int, default=4)
     return parser.parse_args()
@@ -231,7 +230,7 @@ def run_attention(
             launch_num_warps_override=warps,
             launch_num_stages_override=stages,
         )
-    (unified_attention_optimized if optimized else unified_attention)(**kwargs)
+    (unified_attention_optimized if optimized and max_query_len > 1 else unified_attention)(**kwargs)
     return output
 
 
@@ -270,6 +269,7 @@ def measure_case(
     seed: int,
     warps: int | None = None,
     stages: int | None = None,
+    candidate_enabled: bool = True,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "shape": case_name,
@@ -280,14 +280,10 @@ def measure_case(
         "block_n": block_n,
         "num_warps": warps,
         "num_stages": stages,
-        "split_kv_mixed_enabled": os.getenv(
-            "VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED", "0"
-        ).lower() in ("1", "true", "yes"),
+        "candidate_enabled": candidate_enabled and max(query_lengths) > 1,
         "split_kv_segments_requested": (
-            int(os.getenv("VLLM_ILUVATAR_ATTN_SPLIT_KV_SEGMENTS", "4"))
-            if os.getenv("VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED", "0").lower()
-            in ("1", "true", "yes")
-            else None
+            int(os.environ["ILUVATAR_NUM_SPLITS"])
+            if candidate_enabled and max(query_lengths) > 1 else None
         ),
         "status": "ok",
     }
@@ -305,16 +301,6 @@ def measure_case(
         candidate_decode_segments = 16
         if max(query_lengths) == 1:
             head_size_padded = 1 << (HEAD_SIZE - 1).bit_length()
-            if os.getenv("VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED", "0").lower() in (
-                "1", "true", "yes"
-            ):
-                candidate_decode_segments = max(
-                    1,
-                    min(
-                        int(os.getenv("VLLM_ILUVATAR_ATTN_SPLIT_KV_SEGMENTS", "4")),
-                        16,
-                    ),
-                )
 
             def make_decode_workspace(num_segments: int):
                 segment_output = torch.empty(
@@ -333,7 +319,7 @@ def measure_case(
             baseline_segment_workspace = make_decode_workspace(16)
         actual = run_attention(
             query, cache, cu_seqlens, seq_lens, block_table,
-            max(query_lengths), block_m, block_n, True, warps, stages,
+            max(query_lengths), block_m, block_n, candidate_enabled, warps, stages,
             output, max_seqlen_k, segment_workspace, candidate_decode_segments,
         )
         baseline_output = torch.empty_like(query)
@@ -356,13 +342,13 @@ def measure_case(
                 "sdpa_mean_abs_error": sdpa_mean_abs,
             }
         )
-        if sdpa_max_abs > 0.05 and sdpa_mean_abs > 0.001:
+        if sdpa_max_abs > 0.05 or sdpa_mean_abs > 0.001:
             result.update({"status": "fail", "failure_reason": "numerical mismatch"})
             return result
         for _ in range(warmup - 1):
             run_attention(
                 query, cache, cu_seqlens, seq_lens, block_table,
-                max(query_lengths), block_m, block_n, True, warps, stages,
+                max(query_lengths), block_m, block_n, candidate_enabled, warps, stages,
                 output, max_seqlen_k, segment_workspace, candidate_decode_segments,
             )
             run_attention(
@@ -373,7 +359,7 @@ def measure_case(
         samples, wall_samples = time_repeated(
             lambda: run_attention(
                 query, cache, cu_seqlens, seq_lens, block_table,
-                max(query_lengths), block_m, block_n, True, warps, stages,
+                max(query_lengths), block_m, block_n, candidate_enabled, warps, stages,
                 output, max_seqlen_k, segment_workspace, candidate_decode_segments,
             ),
             iterations,
@@ -432,6 +418,7 @@ def measure_case(
                 seed=seed + 1,
                 warps=warps,
                 stages=stages,
+                candidate_enabled=False,
             )
             if decode_result.get("status") == "ok":
                 decode_only_ms = decode_result["median_ms"]
@@ -440,16 +427,13 @@ def measure_case(
                 result["decode_speedup_vs_vllm"] = decode_result[
                     "speedup_vs_vllm"
                 ]
-                result["decode_segments_tested"] = decode_result[
-                    "split_kv_segments_requested"
-                ]
+                result["decode_segments_tested"] = 16
                 result["decode_cost_proxy_ratio"] = decode_only_ms / (
                     median_s * 1000
                 )
                 result["decode_cost_proxy_note"] = (
-                    "isolated 3D decode probe using the mixed candidate segment "
-                    "count, divided by full mixed-call time; not an attributable "
-                    "decoder tail fraction or service pure-decode default"
+                    "native vLLM pure-decode latency divided by full mixed-call "
+                    "time; not an attributable decoder tail fraction"
                 )
             else:
                 result["decode_only_ms"] = None
@@ -464,19 +448,12 @@ def measure_case(
 
 def main() -> None:
     args = parse_args()
-    if args.split_kv_mixed:
-        os.environ["VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED"] = "1"
-        os.environ["VLLM_ILUVATAR_ATTN_SPLIT_KV_SEGMENTS"] = str(
-            args.split_kv_segments
-        )
-    else:
-        os.environ.pop("VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED", None)
+    os.environ["ILUVATAR_NUM_SPLITS"] = str(args.split_kv_segments)
     config = read_config(args.config)
     device = set_device(args.device)
     torch.manual_seed(args.seed)
-    rows: list[dict[str, Any]] = []
-    if args.block_m:
-        candidates = [(args.block_m, args.block_n or 64, args.warps, args.stages)]
+    if args.block_m or args.block_n:
+        candidates = [(args.block_m or 64, args.block_n or 64, args.warps, args.stages)]
     else:
         candidates = [
             (m, n, None, None)
@@ -510,6 +487,7 @@ def main() -> None:
                     args.seed + case_idx * 1000 + cand_idx,
                     warps,
                     stages,
+                    candidate_enabled=args.split_kv_mixed,
                 )
                 output.write(json.dumps(row, ensure_ascii=True) + "\n")
                 output.flush()

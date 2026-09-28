@@ -10,9 +10,9 @@ RESULT_DIR="$PROJECT_DIR/experiments/results"
 
 # Default parameters
 DEVICE="${DEVICE:-cuda:0}"
-REPEATS="${REPEATS:-10}"
+REPEATS="${REPEATS:-3}"
 WARMUP="${WARMUP:-3}"
-ITERATIONS="${ITERATIONS:-50}"
+ITERATIONS="${ITERATIONS:-10}"
 
 echo "==================================="
 echo "MiniCPM Attention Benchmark"
@@ -27,25 +27,11 @@ mkdir -p "$RESULT_DIR"
 
 cd "$TEST_DIR"
 
-# Test 1: Baseline (optimizations disabled)
-echo "Running baseline test..."
-ILUVATAR_USE_OPTIMIZED=0 \
-python attention_harness.py \
-    --config configs/attention_test.json \
-    --device "$DEVICE" \
-    --result "$RESULT_DIR/baseline.jsonl" \
-    --repeats "$REPEATS" \
-    --warmup "$WARMUP" \
-    --iterations "$ITERATIONS"
-
-# Test 2: Split-KV optimization
+# Each run records candidate and native vLLM timing on identical inputs.
 echo ""
 echo "Running repaired Split-KV optimization test..."
-ILUVATAR_USE_OPTIMIZED=1 \
-ILUVATAR_SPLIT_KV=1 \
-VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED=1 \
 python attention_harness.py \
-    --config configs/attention_test.json \
+    --config configs/long_context.json \
     --device "$DEVICE" \
     --result "$RESULT_DIR/split_kv.jsonl" \
     --split-kv-mixed \
@@ -56,16 +42,12 @@ python attention_harness.py \
 
 echo ""
 echo "Running Split-KV configuration comparison..."
-ILUVATAR_USE_OPTIMIZED=1 \
-ILUVATAR_SPLIT_KV=1 \
-ILUVATAR_NUM_SPLITS=8 \
-VLLM_ILUVATAR_ATTN_SPLIT_KV_MIXED=1 \
 python attention_harness.py \
-    --config configs/attention_test.json \
+    --config configs/long_context.json \
     --device "$DEVICE" \
     --result "$RESULT_DIR/split_kv_8.jsonl" \
     --split-kv-mixed \
-    --split-kv-segments 4 \
+    --split-kv-segments 8 \
     --repeats "$REPEATS" \
     --warmup "$WARMUP" \
     --iterations "$ITERATIONS"

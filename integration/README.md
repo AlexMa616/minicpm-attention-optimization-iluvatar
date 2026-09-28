@@ -13,6 +13,12 @@ service path also needs a small, explicit change in the pinned
 5. Old untracked FA3/RoPE/Warp/Pingpong/TMA drafts are not part of the active
    vendor package.
 
+The independently tested RoPE+KV-cache prototype is intentionally absent
+from this patch. The pinned vLLM compilation configuration disables its
+fusion pass on non-ROCm platforms; simply adding a vendor method would not
+make the service use it. The Split-KV patch is also an experimental candidate,
+not an instruction to deploy it after the repaired 8k latency regression.
+
 Apply the reviewable patch from the root of a clean checkout at the pinned
 `flagos-2026-s2` commit:
 

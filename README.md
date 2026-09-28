@@ -35,6 +35,17 @@ by the benchmark scripts, and not included in performance claims:
 - ping-pong scheduling has no independently validated device-side staging
   implementation in this repository.
 
+There is a separate, **standalone** RoPE+KV-cache fusion prototype in
+`kernels/triton_rope_kv_cache.py`. It passed four GPU 2 numerical cases
+(NeoX/interleaved; rotary dimension 64/128). It is not wired into the service:
+the pinned vLLM 0.24.0 compilation pass disables `fuse_rope_kvcache` on
+non-ROCm platforms, and the competition work must not silently modify vLLM.
+Its numerical correctness is not a throughput result.
+
+The standalone correctness command from this repository root is
+`PYTHONPATH=. python3 tests/test_rope_kv_cache.py --device cuda:2` inside
+`mllv`. This test does not exercise the model service.
+
 ## Repository Layout
 
 ```text
@@ -42,6 +53,7 @@ kernels/
   triton_split_kv_paged.py              # active paged Split-KV kernels
   triton_unified_attention_optimized.py # compatibility entry point
   attention.py                          # opt-in standalone dispatcher
+  triton_rope_kv_cache.py               # standalone, not service-integrated
 reference/
   experimental_unvalidated_attention.py # archived pre-audit design
 tests/
@@ -112,8 +124,11 @@ service experiment. The installer does not silently monkey-patch vLLM.
   they must be re-run after the paged-KV and variable-length ABI fixes.
 - No README target value is presented as a measured result.
 - The repaired paged-KV kernel passed 6/6 correctness cases on remote GPU 2;
-  repaired performance reruns and service A/B remain required before any
-  throughput claim is promoted.
+- Its first repaired mixed 8k probe was slower than native vLLM:
+  `75.89 ms` vs `44.02 ms` (0.58x); this is a diagnostic kernel measurement,
+  not a service benchmark. It blocks service A/B for this candidate.
+- RoPE+KV-cache fusion passed 4/4 GPU 2 correctness cases but has no permitted
+  service routing or measured throughput improvement.
 
 See [docs/architecture.md](docs/architecture.md) and
 [experiments/experiment-log.md](experiments/experiment-log.md) for the
