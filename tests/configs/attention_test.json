@@ -1,0 +1,17 @@
+{
+  "pure_prefill": {
+    "num_sequences": 4,
+    "query_len": 256,
+    "prefix_lengths": [512, 1024, 2048, 4096, 8192]
+  },
+  "mixed": {
+    "prefill_query_len": 256,
+    "decode_sequences": 32,
+    "prefix_lengths": [1024, 2048, 4096, 8192, 16384]
+  },
+  "block_m_candidates": [16, 32, 64],
+  "block_q_candidates": [16, 32],
+  "prefill_tile_candidates": [32, 64],
+  "warmup": 3,
+  "iterations": 50
+}
