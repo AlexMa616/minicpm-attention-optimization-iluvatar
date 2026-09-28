@@ -80,7 +80,7 @@ High-performance attention kernel optimizations for **MiniCPM5-2B** inference on
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/minicpm-attention-optimization-iluvatar.git
+git clone https://github.com/AlexMa616/minicpm-attention-optimization-iluvatar.git
 cd minicpm-attention-optimization-iluvatar
 
 # Install dependencies
