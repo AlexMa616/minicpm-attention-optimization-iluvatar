@@ -1055,3 +1055,13 @@
 - `INFERENCE`：Split-KV forward 本体在独立 mixed shape 上比 native mixed kernel 快约 `19%`（8k）和 `23%`（14k），但 dispatcher 重组和 native decode 子调用吞掉部分收益；8 split 只增加开销，没有改善中心时延。
 - `UNKNOWN`：`_subset_attention_kwargs` 内部具体是 q/index_select、KV metadata index_select、workspace 分配还是 allocator 同步占主导；需要下一轮逐操作 CUDA event/CPU 计时，不应把 profiler 的累计 `aten::copy_` CPU 时间直接等同于服务墙钟开销。
 - `DECISION`：停止继续扫描 split 数；下一步优先做“无子批次复制/无每层 workspace 分配”的 dispatcher 原型测量，再评估是否保留 Split-KV kernel。暂不启动 9032，不做官方负载和 Level 3。
+
+### 实验 2026-09-28-08：dispatcher subset 原子操作归因
+
+- 环境：同一 ub39 `mllv` GPU 2，结果 `/workspace/logs/dispatcher_profile_20260928/components_8k.json`；9031/9032 状态不变。
+- `FACT`：在同步隔离的 CUDA event/host wall 测量中，prefill/decode 两个子批次的 `full_subset_helper` 分别约 `0.25/0.27 ms` 和 `0.30/0.33 ms`。
+- `FACT`：单个 `q.index_select` 约 `0.015 ms`（prefill）/`0.004 ms`（decode）；`seqused_k` 和 `block_table` index_select 各约 `0.006 ms`；workspace `empty_like` 约 `0.001 ms`。
+- `FACT`：request index tensor 约 `0.04 ms`，selected `cu_seqlens` 构造约 `0.10 ms`；这些操作在当前 shape 均为亚毫秒级。
+- `CORRECTION`：此前 dispatcher wrapper 记录的 `15–24 ms/子批次` 受前序异步 GPU 工作/allocator 等待影响，不能作为 `_subset_attention_kwargs` 固有耗时；原“subset helper 是主要软件瓶颈”的判断撤回。
+- `INFERENCE`：完整 dispatcher 相对 raw Split-KV 的约 `3.1 ms`（8k）/`3.8 ms`（14k）差额主要来自 native decode 子调用、分流 launch/同步和少量 scatter，而非单一 `index_copy_` 或 metadata 构造。
+- `DECISION`：当前主线收敛到 mixed prefill Split-KV forward kernel；不再优先做 workspace 复用或 dispatcher 重写。下一步获取 BI-V150 kernel profiler 的带宽/占用数据，再决定 tile、KV 访问或并行度优化。
