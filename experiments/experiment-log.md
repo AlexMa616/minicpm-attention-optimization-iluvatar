@@ -990,3 +990,23 @@
 - 遇到的问题：SSH ControlMaster 可检查但远端命令间歇性超时；`scp` 经 bastion 无法写入映射目标，改用 `tar | ssh docker exec -i tar` 将文件传入 staging。没有覆盖 `/workspace/vllm-plugin-FL` 官方服务源目录。
 - 未完成：修正后的 harness 尚未在 GPU 2 跑完整 4/8、8k/14k 交叉复测；RoPE 尚未做公平的内核延迟对照或服务路由验证。当前不能声称任何新的服务性能收益。
 - 下一步：仅在 SSH 稳定时先对 staging 的修复版跑 4/8 split 同形状微基准；若仍慢于 native，停止该候选并回到 2D prefill 真实 tile/profile。RoPE 若未来获得规则许可修改框架编译 pass，再独立设计公平 A/B；此前不让它进入 9032。
+
+### 实验 2026-09-28-05：修正 harness 交叉复测与 mixed decode 分离探针
+
+- 环境：ub39 `mllv`，GPU 2；独立 staging `/workspace/split_kv_repair_20260928`，修正 harness SHA-256 `503600093463931b02d7127da57c45ba96d2044d532b157c9196776163edaab8`。9031 官方服务未操作；9032 未重启、未发送本轮请求。
+- 命令：`PYTHONPATH=/workspace/split_kv_repair_20260928 VLLM_PLUGINS=fl python3 tools/repair_bench_20260928/tests/attention_harness.py --config tools/repair_bench_20260928/tests/configs/long_context.json --device cuda:2 --result <对应 jsonl> --shape mixed --prefix-token <8192|14336> --block-m 64 --block-n 64 --split-kv-mixed --split-kv-segments <4|8> --warmup 3 --iterations 10 --repeats 5`。结果在 `/workspace/logs/split_kv_repaired_gpu2_20260928/rerun*20260928.jsonl`，每个 `.exit` 为 `0`。
+
+| 前缀 | Split | Candidate ms | Native ms | 比值 | Candidate TFLOP/s | SDPA max abs |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8192 | 4 | 76.198 | 43.965 | 0.577x | 2.056 | 0.000488 |
+| 8192 | 8 | 74.530 | 44.011 | 0.591x | 2.102 | 0.000488 |
+| 14336 | 4 | 125.789 | 73.490 | 0.584x | 2.077 | 0.000488 |
+| 14336 | 8 | 119.756 | 73.464 | 0.613x | 2.181 | 0.000488 |
+
+- `FACT`：候选四个形状均数值通过，且时延约为原生的 `1.63–1.73x`；这明确否定了修复前 `2.15–2.43x` 的加速声称。CUDA-event 与 wall 时延接近，不能简单归咎 Python 计时。
+- `HYPOTHESIS`：统一 Split-KV 对 mixed 中 30 个 `q_len=1` decode 请求也按 `BLOCK_M=64` 发射 2D tile，浪费矩阵计算并导致拖尾；需在 dispatcher 层拆开 prefill 和 decode 来区分。`vllm-plugin-FL` 本地工作区增加了**未提交诊断原型**（`impl/attention.py:_run_unified_attention`）；独立仓库增加 `tests/dispatcher_mixed_probe.py`，并仅把原型复制到隔离 staging，不修改服务源目录。
+- 探针命令：`PYTHONPATH=/workspace/split_kv_repair_20260928:/workspace/split_kv_repair_20260928/tools/repair_bench_20260928/tests VLLM_PLUGINS=fl python3 tools/repair_bench_20260928/tests/dispatcher_mixed_probe.py --device cuda:2 --prefix 8192 --splits 4 --warmup 3 --iterations 10 --repeats 5 --result /workspace/logs/split_kv_repaired_gpu2_20260928/dispatcher4_8k_20260928.txt`。
+- `FACT`：dispatcher 探针候选 `43.580 ms`，native `44.000 ms`，`1.010x`；对 native max abs `0.001953`，对 fp32 SDPA max abs `0.000488`，5 repeats。解码行走 native 3D，prefill 行走 Split-KV。该微小差异尚在可能的环境噪声范围，不能称为服务加速。
+- `RISK`：原型每次调用对 GPU `cu_seqlens_q` 做 `.cpu().tolist()`，强制 host 同步；还在每层构建新索引、工作区并执行 scatter。当前探针不覆盖 CUDA graph capture 和正式调度，不能直接作为可提交实现或启动 9032 A/B。若继续，必须从 scheduler/metadata 获得无需 GPU→CPU 同步的分组信息，且验证图捕获、各种请求排列和 workspace 语义。
+- 问题：14k 和 8-split dispatcher 补测命令发出时，SSH 控制连接连续超时；没有对应 `.txt`/`.exit` 产物，不能假定执行或成功。已停止重复调用。候选默认不开启，本地插件工作区变脏；GitHub 的已推送集成补丁**不包含**这个原型，仍对应旧 `a175b28`。当前不推送原型、不宣称已同步正式修复。
+- 决策：保留 8k 探针作为原因辨析，停止原 Split-KV 整批 candidate 的服务验证；先解决无同步分组与 2D prefill 的内核效率，再做 GPU 2 完整对拍，最后考虑 9032。不得触碰 9031。
