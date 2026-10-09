@@ -1687,3 +1687,5 @@
 - `VERIFICATION`：56个原始证据文件SHA256复核通过，均已进入待提交集合，合计5,136,649字节；正式分支迁出的13个文件中，12个源码/脚本与实验仓库备份逐字节相同，README保留原说明并增加历史归档警示。归档Python语法与shell语法检查通过；正式树无引用已迁出工具的残留。
 - `FAILURE/BOUNDARY`：实验仓库全量 `git diff --cached --check` 报告原始日志、profiler及patch上下文的历史空白字符；这些是证据原件，不修改。排除 `evidence/**` 与原始patch后的文档/脚本空白检查通过；没有以清理空白为由改写raw证据。
 - `COMMAND`：`gh auth status` 确认AlexMa616已登录；再次有界执行两仓库 `git ls-remote --heads`，远端仍为上述锚点，没有发现并发更新。先上传实验归档，再上传不改变生产行为的正式树清理。
+- `RESULT`：实验仓库首批归档提交 `d37ebb7`，普通 `git push origin main` 成功（`a21f227..d37ebb7`）；正式分支收口提交 `0d686d5`，普通 `git push origin jl2026-native-2d` 成功（`02badf7..0d686d5`）。没有force push，没有修改原开发工作区的两处源码和6个新脚本。
+- `BOUNDARY`：本轮验收覆盖归档完整性、语法、文档和正式源码不变；没有可用GPU环境，未复测算子、服务性能或准确率。已上传的补丁仍标记未验证，历史Level3不等于新环境验收。
