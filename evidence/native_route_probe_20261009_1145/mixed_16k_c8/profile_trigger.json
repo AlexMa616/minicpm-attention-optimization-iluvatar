@@ -1,0 +1,33 @@
+{
+  "event": {
+    "event": "step_begin",
+    "time": 1791517459.3102782,
+    "pid": 377061,
+    "step": 11,
+    "kind": "mixed",
+    "q1_requests": 1,
+    "q_gt1_requests": 1,
+    "scheduled_tokens": 2048,
+    "graph_mode": "NONE",
+    "metadata": [
+      {
+        "class": "vllm_fl.dispatch.backends.vendor.iluvatar.impl.attention.IluvatarAttentionMetadata",
+        "source": "/workspace/native_route_probe_20261009_1145/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention.py",
+        "max_query_len": 2047
+      }
+    ],
+    "scheduler_config": {
+      "max_num_seqs": 256,
+      "max_num_batched_tokens": 2048,
+      "max_num_scheduled_tokens": null,
+      "enable_chunked_prefill": true,
+      "max_num_partial_prefills": 1,
+      "max_long_partial_prefills": 1,
+      "long_prefill_token_threshold": 0
+    }
+  },
+  "start": {
+    "status": 200,
+    "body": ""
+  }
+}

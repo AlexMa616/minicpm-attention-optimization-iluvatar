@@ -1,0 +1,118 @@
+diff --git a/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention.py b/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention.py
+index acb0b6f..9950523 100644
+--- a/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention.py
++++ b/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention.py
+@@ -71,6 +71,9 @@ def _run_unified_attention(**kwargs):
+         "true",
+         "yes",
+     )
++    native_decode_tuning = os.environ.get(
++        "ILUVATAR_NATIVE_DECODE_TUNE", "0"
++    ).lower() in ("1", "true", "yes")
+ 
+     native_supported = (
+         kwargs["q"].dtype == torch.bfloat16
+@@ -89,16 +92,19 @@ def _run_unified_attention(**kwargs):
+         and kwargs.get("use_td", False) is False
+         and kwargs.get("causal") is True
+     )
+-    if native_2d_tuning and max_query_len > 1 and native_supported:
++    decode_only = native_decode_tuning and max_query_len == 1
++    if native_2d_tuning and native_supported and (max_query_len > 1 or decode_only):
+         global _NATIVE_2D_ROUTE_LOGGED
+         if not _NATIVE_2D_ROUTE_LOGGED:
+             logger.info(
+                 "Iluvatar native 2D attention enabled: BLOCK_M=%s TILE=%s "
+-                "warps=%s launch_stages=%s pipeline_stages=1 max_query_len=%s",
++                "warps=%s launch_stages=%s pipeline_stages=1 decode=%s "
++                "max_query_len=%s",
+                 os.environ.get("ILUVATAR_2D_BLOCK_M", "128"),
+                 os.environ.get("ILUVATAR_2D_TILE_SIZE", "16"),
+                 os.environ.get("ILUVATAR_2D_NUM_WARPS", "8"),
+                 os.environ.get("ILUVATAR_2D_NUM_STAGES", "2"),
++                decode_only,
+                 max_query_len,
+             )
+             _NATIVE_2D_ROUTE_LOGGED = True
+@@ -115,6 +121,12 @@ def _run_unified_attention(**kwargs):
+                 os.environ.get("ILUVATAR_2D_NUM_STAGES", "2")
+             ),
+             pipeline_stages_override=1,
++            decode_only_override=decode_only,
++            decode_block_m_override=(
++                int(os.environ.get("ILUVATAR_NATIVE_DECODE_BLOCK_M", "8"))
++                if decode_only
++                else None
++            ),
+         )
+     return vllm_unified_attention(**kwargs)
+ 
+diff --git a/vllm_fl/dispatch/backends/vendor/iluvatar/impl/ops/triton_unified_attention_native.py b/vllm_fl/dispatch/backends/vendor/iluvatar/impl/ops/triton_unified_attention_native.py
+index ea9f2ad..9090cc3 100644
+--- a/vllm_fl/dispatch/backends/vendor/iluvatar/impl/ops/triton_unified_attention_native.py
++++ b/vllm_fl/dispatch/backends/vendor/iluvatar/impl/ops/triton_unified_attention_native.py
+@@ -853,6 +853,8 @@ def unified_attention(
+     pipeline_stages_override: int | None = None,
+     scalar_block_lookup_override: bool = False,
+     mixed_dual_launch_override: bool = False,
++    decode_only_override: bool = False,
++    decode_block_m_override: int | None = None,
+ ):
+     # Resolve causal: bool or per-seq tensor.
+     use_per_seq_causal = isinstance(causal, torch.Tensor)
+@@ -934,6 +936,25 @@ def unified_attention(
+         if launch_num_stages_override is not None:
+             launch_num_stages = int(launch_num_stages_override)
+ 
++    # Experimental exact decode launch.  This is intentionally opt-in and is
++    # not used by the production dispatcher yet.  The existing kernel already
++    # has a MIXED_DECODE_ONLY path; use it with one program per sequence so a
++    # q_len=1 batch does not pay the 2D upper-bound grid or masked rows.
++    if decode_only_override:
++        if max_seqlen_q != 1:
++            raise ValueError("decode_only_override requires max_seqlen_q == 1")
++        if decode_block_m_override is not None:
++            if decode_block_m_override < num_queries_per_kv:
++                raise ValueError(
++                    "decode_block_m_override must cover one KV group"
++                )
++            if decode_block_m_override % num_queries_per_kv:
++                raise ValueError(
++                    "decode_block_m_override must be divisible by num_queries_per_kv"
++                )
++            BLOCK_M = int(decode_block_m_override)
++            BLOCK_Q = BLOCK_M // num_queries_per_kv
++
+     # Ideally we would launch with kernel with:
+     # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
+     # However, it is slow to realize the query_lens on cpu.
+@@ -943,7 +964,9 @@ def unified_attention(
+     #    = \sum_i[floor(query_len[i] / BLOCK_Q)] + num_seqs
+     #   <= floor(\sum_i(query_len[i]) / BLOCK_Q) + num_seqs
+     #    = floor(q.shape[0] / BLOCK_Q) + num_seqs
+-    total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
++    total_num_q_blocks = (
++        num_seqs if decode_only_override else q.shape[0] // BLOCK_Q + num_seqs
++    )
+ 
+     sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
+ 
+@@ -1042,6 +1065,9 @@ def unified_attention(
+         or num_seqs > seq_threshold_3D
+         or is_batch_invariant
+     )
++    if decode_only_override:
++        # The exact decode experiment is a 2D one-CTA-per-sequence launch.
++        use_3d = False
+ 
+     # The kernel signature is the same for 2D and 3D — only the launch
+     # grid + a handful of constexpr toggles differ.  Per-token-head scale
+@@ -1151,7 +1177,7 @@ def unified_attention(
+         NUM_SEGMENTS_PER_SEQ=num_segments,
+         USE_FP8=output_scale is not None,
+         MIXED_PREFILL_ONLY=mixed_dual_launch,
+-        MIXED_DECODE_ONLY=False,
++        MIXED_DECODE_ONLY=decode_only_override,
+         IS_3D=use_3d,
+         KV_QUANT_MODE=kv_quant_mode,
+         Q_IS_FP8=(q.dtype == current_platform.fp8_dtype()),

@@ -1,0 +1,17 @@
+[
+  "/usr/local/bin/vllm",
+  "serve",
+  "/workspace/MiniCPM5-2B",
+  "--port",
+  "9034",
+  "--served-model-name",
+  "minicpm-decode-gpu4",
+  "--gpu-memory-utilization",
+  "0.85",
+  "--max-model-len",
+  "131072",
+  "--compilation-config",
+  "{\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}",
+  "--profiler-config",
+  "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"/workspace/logs/native_route_probe_20261009_1145/traces\", \"torch_profiler_with_stack\": false, \"torch_profiler_record_shapes\": false, \"ignore_frontend\": true, \"max_iterations\": 8}"
+]

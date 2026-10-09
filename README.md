@@ -1,5 +1,34 @@
 # MiniCPM Attention Optimization for Iluvatar BI-V150
 
+## Current Status: 2026-10-09
+
+JL2026 的实验留痕仓库。旧机器不可用，本阶段收口，等待新环境继续。
+
+- [阶段总结与新环境交接](docs/stage-summary-2026-10-09.md)：结论、数据、代码边界、未决问题和恢复顺序。
+- [完整实验记录快照](experiments/records/2026-10-09-experiment-log.md)：截至本阶段的本地完整记录。
+- [原始证据说明](evidence/README.md)：GPU4 A/B CSV、指标采样、路由事件与 profiler trace。
+- [实验脚本归档](experiments/native_2d_tuning/README.md)及[未验证补丁](experiments/patches/README.md)。
+
+| 仓库 | 用途 |
+|---|---|
+| [AlexMa616/vllm-plugin-FL / jl2026-native-2d](https://github.com/AlexMa616/vllm-plugin-FL/tree/jl2026-native-2d) | 正式候选算子、框架接入和必要验证工具；不加入未验收的Decode/量化改动 |
+| 本仓库 | 实验工具、失败方案、完整记录、原始证据、未提交源码补丁和交接 |
+
+Native 2D 配置为 `128/16/8/2/1`（BLOCK_M/TILE/warps/launch stages/pipeline）。
+历史BF16 candidate完整Level 3为 `102/105 = 97.14%`，不覆盖新环境或后续补丁。
+Decode-B8 kernel-only有收益，但服务4K约 `+2.13%` 未证实稳定、16K约 `-0.02%`。
+最新隔离探针确认vendor backend已加载却在Native guard回退；
+`k/v_descale` 是源码与合成测试指向的原因，真实逐项guard结果尚未取回。
+**下一步先复核新环境、路由和正确性，不扩大优化方向。**
+
+## Historical Snapshot: Not The Current Production Plan
+
+以下原有说明，以及 `kernels/`、`reference/`、`tests/`、`scripts/`、
+`integration/`、`docs/architecture.md` 和旧 `experiments/experiment-log.md`
+均保留为早期Split-KV阶段记录。旧文档中的active/validated只描述当时状态；
+Split-KV最终没有稳定服务收益，不是当前正式方案。
+不要直接运行旧安装脚本或自动apply补丁。最新状态以上方入口为准，历史不追溯改写。
+
 This repository contains the validated Split-KV attention work for
 MiniCPM5-2B on Iluvatar BI-V150. It is a research and integration artifact;
 numbers are not official competition results until they are reproduced with

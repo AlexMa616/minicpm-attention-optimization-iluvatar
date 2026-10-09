@@ -1,0 +1,72 @@
+{
+  "pid": 374465,
+  "cmdline": [
+    "/usr/local/bin/python3.12",
+    "/usr/local/bin/vllm",
+    "serve",
+    "/workspace/MiniCPM5-2B",
+    "--port",
+    "9034",
+    "--served-model-name",
+    "minicpm-decode-gpu4",
+    "--gpu-memory-utilization",
+    "0.85",
+    "--max-model-len",
+    "131072",
+    "--compilation-config",
+    "{\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}"
+  ],
+  "environment": {
+    "PYTHONPATH": "/workspace/vllm-plugin-FL:/usr/local/lib/python3.12/site-packages",
+    "CUDA_VISIBLE_DEVICES": "4",
+    "VLLM_PLUGINS": "fl",
+    "ILUVATAR_NATIVE_2D_TUNE": "1",
+    "ILUVATAR_NATIVE_DECODE_TUNE": "1",
+    "ILUVATAR_NATIVE_DECODE_BLOCK_M": "8"
+  },
+  "initial_metrics": {
+    "time": 1791512511.6208448,
+    "vllm:num_requests_running": 0.0,
+    "vllm:num_requests_waiting": 0.0,
+    "vllm:kv_cache_usage_perc": 0.0,
+    "vllm:num_preemptions_total": 0.0,
+    "vllm:prefix_cache_queries_total": 0.0,
+    "vllm:prefix_cache_hits_total": 0.0,
+    "cache_config": [
+      {
+        "_block_size_resolved": "True",
+        "block_size": "16",
+        "cache_dtype": "auto",
+        "calculate_kv_scales": "False",
+        "enable_prefix_caching": "True",
+        "engine": "0",
+        "gpu_memory_utilization": "0.85",
+        "hash_block_size": "None",
+        "is_attention_free": "False",
+        "kv_cache_dtype_skip_layers": "[]",
+        "kv_cache_max_concurrency": "3.9813232421875",
+        "kv_cache_memory_bytes": "None",
+        "kv_cache_size_tokens": "521840",
+        "kv_offloading_backend": "native",
+        "kv_offloading_size": "None",
+        "kv_sharing_fast_prefill": "False",
+        "mamba_block_size": "None",
+        "mamba_cache_dtype": "auto",
+        "mamba_cache_mode": "none",
+        "mamba_page_size_padded": "None",
+        "mamba_ssm_cache_dtype": "auto",
+        "num_cpu_blocks": "None",
+        "num_gpu_blocks": "32615",
+        "num_gpu_blocks_override": "None",
+        "prefix_caching_hash_algo": "sha256",
+        "sliding_window": "None",
+        "user_specified_block_size": "False",
+        "user_specified_mamba_block_size": "False"
+      }
+    ]
+  },
+  "sha256": {
+    "/workspace/vllm-plugin-FL/experiments/native_2d_tuning/service_and_profiler/diagnose_decode_queue.py": "8f8a7ddba45fb6d1d21581c1cc0f1405805f9fe7fd6ddcbe114e68a5a599f9e1",
+    "/workspace/vllm-plugin-FL/vllm_fl/dispatch/backends/vendor/iluvatar/impl/attention.py": "683553aba9b19b08e430704de0f0597c7c3f72002f085e82483d7712a1426c35"
+  }
+}

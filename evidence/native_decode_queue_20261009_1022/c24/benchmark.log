@@ -1,0 +1,55 @@
+INFO 10-09 10:24:21 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 10-09 10:24:21 [__init__.py:46] - fl -> vllm_fl:register
+INFO 10-09 10:24:21 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+/workspace/FlagGems/src/flag_gems/utils/libentry.py:728: DeprecationWarning: use_cuda_graph is deprecated; use benchmark_mode='replay' or benchmark_mode='event'
+  super().__init__(*args, **kwargs)
+/workspace/FlagGems/src/flag_gems/utils/libentry.py:411: RuntimeWarning: active Triton backend does not provide a replay benchmarker; falling back to event timing
+  resolved_benchmark = resolve_benchmarker(
+INFO 10-09 10:24:27 [__init__.py:237] Platform plugin fl is activated
+WARNING 10-09 10:24:32 [interface.py:358] Failed to import from vllm._C: ModuleNotFoundError("No module named 'vllm._C'")
+/usr/local/lib/python3.12/site-packages/torch/jit/_script.py:362: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+WARNING 10-09 10:24:32 [interface.py:358] Failed to import from vllm._C: ModuleNotFoundError("No module named 'vllm._C'")
+WARNING 10-09 10:24:32 [interface.py:358] Failed to import from vllm._C: ModuleNotFoundError("No module named 'vllm._C'")
+WARNING 10-09 10:24:32 [interface.py:358] Failed to import from vllm._C: ModuleNotFoundError("No module named 'vllm._C'")
+[2026-10-09 10:24:32] [INFO] [vllm_fl.dispatch.backends.vendor.iluvatar.iluvatar] patch_sampler_compile_for_iluvatar: unwrapped topk_topp_sampler.compiled_random_sample
+[2026-10-09 10:24:32] [INFO] [vllm_fl.dispatch.backends.vendor.iluvatar.iluvatar] patch_sampler_compile_for_iluvatar: unwrapped logprobs.batched_count_greater_than
+[2026-10-09 10:24:32] [INFO] [vllm_fl.dispatch.backends.vendor.iluvatar.iluvatar] patch_torch_inductor_for_iluvatar: backend '['iluvatar']' already supports target='cuda', no GPUTarget remap needed.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7d3173f91580>, trust_remote_code=False, seed=2026100901, num_prompts=24, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, custom_ensure_client_side_data=False, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, timed_trace_chunk_hash_size=16, timed_trace_sec_multiplier=1, timed_trace_label_timestamp='timestamp', timed_trace_label_input_length='input_length', timed_trace_label_output_length='output_length', timed_trace_label_hash_ids='hash_ids', blazedit_min_distance=0.0, blazedit_max_distance=1.0, asr_max_audio_len_sec=inf, asr_min_audio_len_sec=0.0, random_input_len=16384, random_output_len=128, random_range_ratio='0.0', random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, bfcl_categories=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, speed_bench_dataset_subset='qualitative', speed_bench_output_len=4096, speed_bench_category=None, label=None, backend='vllm', base_url='http://127.0.0.1:9034', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=24, model='minicpm-decode-gpu4', input_len=None, output_len=None, tokenizer='/workspace/MiniCPM5-2B', tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir='/workspace/logs/native_decode_queue_20261009_1022/c24', result_filename='benchmark.json', ignore_eos=True, self_timed=None, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-80057afc-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, lora_assignment='random', ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, chat_template_kwargs=None, extra_body=None, skip_tokenizer_init=False, insecure=False, plot_timeline=False, timeline_itl_thresholds='25,50', plot_dataset_stats=False)
+INFO 10-09 10:24:33 [utils.py:90] Sampling input_len from [16383, 16383] and output_len from [128, 128]
+/usr/local/lib/python3.12/site-packages/aiohttp/connector.py:988: DeprecationWarning: enable_cleanup_closed ignored because https://github.com/python/cpython/pull/118960 is fixed in Python version sys.version_info(major=3, minor=12, micro=11, releaselevel='final', serial=0)
+  super().__init__(
+WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 24
+  0%|          | 0/24 [00:00<?, ?it/s]  4%|▍         | 1/24 [03:55<1:30:14, 235.40s/it]  8%|▊         | 2/24 [04:12<39:15, 107.07s/it]   12%|█▎        | 3/24 [04:27<22:40, 64.80s/it]  17%|█▋        | 4/24 [04:42<15:03, 45.17s/it] 21%|██        | 5/24 [04:57<10:52, 34.36s/it] 25%|██▌       | 6/24 [05:12<08:19, 27.73s/it] 29%|██▉       | 7/24 [05:26<06:38, 23.43s/it] 33%|███▎      | 8/24 [05:57<06:52, 25.77s/it] 38%|███▊      | 9/24 [05:58<04:28, 17.91s/it] 42%|████▏     | 10/24 [06:01<03:08, 13.50s/it] 46%|████▌     | 11/24 [06:04<02:12, 10.18s/it] 50%|█████     | 12/24 [06:08<01:38,  8.20s/it] 54%|█████▍    | 13/24 [06:08<01:04,  5.90s/it] 58%|█████▊    | 14/24 [06:09<00:42,  4.26s/it] 62%|██████▎   | 15/24 [06:09<00:28,  3.12s/it] 67%|██████▋   | 16/24 [06:10<00:18,  2.32s/it] 71%|███████   | 17/24 [06:10<00:12,  1.73s/it] 75%|███████▌  | 18/24 [06:10<00:07,  1.32s/it] 79%|███████▉  | 19/24 [06:11<00:05,  1.03s/it] 83%|████████▎ | 20/24 [06:11<00:03,  1.20it/s] 88%|████████▊ | 21/24 [06:11<00:01,  1.55it/s] 92%|█████████▏| 22/24 [06:12<00:01,  1.93it/s] 96%|█████████▌| 23/24 [06:12<00:00,  2.36it/s]100%|██████████| 24/24 [06:12<00:00,  2.84it/s]100%|██████████| 24/24 [06:12<00:00, 15.52s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     24        
+Failed requests:                         0         
+Maximum request concurrency:             24        
+Benchmark duration (s):                  372.49    
+Total input tokens:                      393216    
+Total generated tokens:                  3072      
+Request throughput (req/s):              0.06      
+Output token throughput (tok/s):         8.25      
+Peak output token throughput (tok/s):    171.00    
+Peak concurrent requests:                24.00     
+Total token throughput (tok/s):          1063.89   
+---------------Time to First Token----------------
+Mean TTFT (ms):                          177501.41 
+Median TTFT (ms):                        175682.47 
+P99 TTFT (ms):                           351127.65 
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          1304.17   
+Median TPOT (ms):                        1517.96   
+P99 TPOT (ms):                           1909.69   
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           1304.17   
+Median ITL (ms):                         1058.81   
+P99 ITL (ms):                            3606.64   
+==================================================

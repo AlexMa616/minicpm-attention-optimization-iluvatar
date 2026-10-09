@@ -1,0 +1,32 @@
+{
+  "model": "MiniCPM5-2B",
+  "platform": "Iluvatar BI-V150",
+  "dtype": "bfloat16",
+  "num_query_heads": 16,
+  "num_kv_heads": 2,
+  "head_size": 128,
+  "block_size": 16,
+  "warmup": 5,
+  "iterations": 20,
+  "block_q_candidates": [4, 8, 16, 32, 64, 128],
+  "block_m_candidates": [32, 64, 128],
+  "prefill_tile_candidates": [16, 32, 64, 128],
+  "pure_prefill": {
+    "num_sequences": 8,
+    "query_len": 2048,
+    "prefix_lengths": [0, 2048, 4096, 6144, 8192, 10240, 12288, 14336]
+  },
+  "mixed": {
+    "prefill_sequences": 1,
+    "prefill_query_len": 2048,
+    "decode_sequences": 30,
+    "decode_query_len": 1,
+    "prefix_lengths": [0, 8192, 14336]
+  },
+  "gates": {
+    "baseline_effective_tflops": 3.4,
+    "minimum_effective_tflops": 15.0,
+    "minimum_relative_speedup": 4.0,
+    "maximum_mixed_decode_tail_ratio": 0.20
+  }
+}
