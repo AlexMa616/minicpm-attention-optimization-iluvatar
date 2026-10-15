@@ -1,10 +1,11 @@
 # MiniCPM Attention Optimization for Iluvatar BI-V150
 
-## Current Status: 2026-10-09
+## Current Status: 2026-10-15
 
-JL2026 的实验留痕仓库。旧机器不可用，本阶段收口，等待新环境继续。
+JL2026 的实验留痕仓库。本阶段研究已收口，正式候选已冻结，后续仅做代码 review、仓库提交和比赛材料整理。
 
-- [阶段总结与新环境交接](docs/stage-summary-2026-10-09.md)：结论、数据、代码边界、未决问题和恢复顺序。
+- [最终阶段总结](docs/stage-summary-2026-10-15.md)：最终候选、准确率、服务 A/B、纯 decode 取证和停止决策。
+- [阶段总结与新环境交接](docs/stage-summary-2026-10-09.md)：历史交接记录，保留当时的环境状态。
 - [完整实验记录快照](experiments/records/2026-10-09-experiment-log.md)：截至本阶段的本地完整记录。
 - [原始证据说明](evidence/README.md)：GPU4 A/B CSV、指标采样、路由事件与 profiler trace。
 - [实验脚本归档](experiments/native_2d_tuning/README.md)及[未验证补丁](experiments/patches/README.md)。
@@ -14,12 +15,10 @@ JL2026 的实验留痕仓库。旧机器不可用，本阶段收口，等待新�
 | [AlexMa616/vllm-plugin-FL / jl2026-native-2d](https://github.com/AlexMa616/vllm-plugin-FL/tree/jl2026-native-2d) | 正式候选算子、框架接入和必要验证工具；不加入未验收的Decode/量化改动 |
 | 本仓库 | 实验工具、失败方案、完整记录、原始证据、未提交源码补丁和交接 |
 
-Native 2D 配置为 `128/16/8/2/1`（BLOCK_M/TILE/warps/launch stages/pipeline）。
-历史BF16 candidate完整Level 3为 `102/105 = 97.14%`，不覆盖新环境或后续补丁。
-Decode-B8 kernel-only有收益，但服务4K约 `+2.13%` 未证实稳定、16K约 `-0.02%`。
-最新隔离探针确认vendor backend已加载却在Native guard回退；
-`k/v_descale` 是源码与合成测试指向的原因，真实逐项guard结果尚未取回。
-**下一步先复核新环境、路由和正确性，不扩大优化方向。**
+正式候选配置为 `128/64/8/2/1`（BLOCK_M/TILE/warps/launch stages/pipeline），源码默认仍为 TILE16，TILE64 由候选服务显式启用。
+TILE64 完成 Level 3 两轮合计 `204/210 = 97.14%`；同源码 TILE16/TILE64 服务 A/B 为 4K/c64 `+5.46%`、16K/c64 `+14.93%`。
+纯 decode 取证已完成，但没有观察到已验证的 Native Decode 专用 kernel；Decode-B8、FP8 KV、动态 shape 分派和 stages3 均不进入正式候选。
+**研究阶段已结束，下一步只做 review、提交和比赛材料整理。**
 
 ## Historical Snapshot: Not The Current Production Plan
 
